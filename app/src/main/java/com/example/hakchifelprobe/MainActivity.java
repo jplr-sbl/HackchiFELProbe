@@ -48,6 +48,7 @@ public class MainActivity extends Activity {
     scroll.addView(log); root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
     button(root,"4. Read FEL version (read-only)",v->readFelVersion(1));
     button(root,"5. Reliability test: 5 version reads",v->readFelVersion(5));
+    button(root,"6. Read 16 bytes of FEL scratch RAM",v->new Thread(()->readScratchRam()).start());
     button(root,"Share log",v->{Intent i=new Intent(Intent.ACTION_SEND);i.setType("text/plain");i.putExtra(Intent.EXTRA_TEXT,log.getText().toString());startActivity(Intent.createChooser(i,"Share diagnostic log"));});
     setContentView(root);
     IntentFilter f=new IntentFilter(PERMISSION);
@@ -187,6 +188,57 @@ public class MainActivity extends Activity {
       append("PASS: "+repeats+"/"+repeats+" consistent FEL version responses; no memory writes.");
     }catch(Exception e){append("FAIL: "+e.getMessage());}
     finally{c.releaseInterface(iface);c.close();}
+  }
+
+  void report(String message){runOnUiThread(()->append(message));}
+  void readScratchRam(){
+    if(device==null||!manager.hasPermission(device)){report("FAIL: FEL device or USB permission missing");return;}
+    UsbInterface iface=null;UsbEndpoint in=null,out=null;
+    for(int i=0;i<device.getInterfaceCount();i++){
+      UsbInterface it=device.getInterface(i);UsbEndpoint a=null,b=null;
+      for(int k=0;k<it.getEndpointCount();k++){
+        UsbEndpoint ep=it.getEndpoint(k);
+        if(ep.getType()!=UsbConstants.USB_ENDPOINT_XFER_BULK)continue;
+        if(ep.getDirection()==UsbConstants.USB_DIR_IN)a=ep;
+        else b=ep;
+      }
+      if(a!=null&&b!=null){iface=it;in=a;out=b;break;}
+    }
+    if(iface==null){report("FAIL: No bulk endpoints");return;}
+    UsbDeviceConnection c=manager.openDevice(device);
+    if(c==null){report("FAIL: Cannot open USB device");return;}
+    boolean claimed=false;
+    try{
+      claimed=c.claimInterface(iface,false);
+      if(!claimed)throw new Exception("Cannot claim FEL interface");
+      // Query the boot ROM first, and derive the scratch address it reports.
+      felWriteRequest(c,out,in);
+      byte[] version=felRead(c,out,in,32);
+      byte[] versionStatus=felRead(c,out,in,8);
+      if(!"AWUSBFEX".equals(new String(version,0,8,StandardCharsets.US_ASCII)))
+        throw new Exception("Invalid FEL version signature");
+      if(versionStatus[0]!=(byte)0xff||versionStatus[1]!=(byte)0xff)
+        throw new Exception("Unexpected version status: "+hex(versionStatus));
+      long scratch=ByteBuffer.wrap(version).order(ByteOrder.LITTLE_ENDIAN).getInt(20)&0xffffffffL;
+      if(scratch==0||scratch>0x100000||scratch%4!=0)
+        throw new Exception("Scratch address outside conservative range: 0x"+Long.toHexString(scratch));
+      report(String.format(Locale.US,"Reading 16 bytes at FEL scratch address 0x%08X (read-only)",scratch));
+      ByteBuffer req=ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
+      req.putInt(0x103); // AW_FEL_1_READ
+      req.putInt((int)scratch);
+      req.putInt(16);
+      req.putInt(0);
+      send(c,out,usbHeader(0x12,16));
+      send(c,out,req.array());
+      usbStatus(c,in);
+      byte[] data=felRead(c,out,in,16);
+      byte[] status=felRead(c,out,in,8);
+      if(status[0]!=(byte)0xff||status[1]!=(byte)0xff)
+        throw new Exception("Unexpected read status: "+hex(status));
+      report("RAM bytes: "+hex(data));
+      report("PASS: FEL read-only RAM transfer completed (16 bytes)");
+    }catch(Exception e){report("FAIL: FEL RAM read: "+e.getMessage());}
+    finally{if(claimed)c.releaseInterface(iface);c.close();}
   }
   @Override protected void onDestroy(){unregisterReceiver(receiver);super.onDestroy();}
 }
