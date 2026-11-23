@@ -20,6 +20,23 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
+      - name: Bundle and verify original Hakchi binaries
+        run: |
+          mkdir -p app/src/main/assets
+          curl --fail --location --retry 3 --silent --show-error https://raw.githubusercontent.com/ClusterM/hakchi2/stable/data/fes1.bin -o app/src/main/assets/fes1.bin
+          curl --fail --location --retry 3 --silent --show-error https://raw.githubusercontent.com/ClusterM/hakchi2/stable/data/uboot.bin -o app/src/main/assets/uboot.bin
+          python3 - <<'PY'
+          import hashlib, pathlib
+          expected = {
+            "fes1.bin": (12624, "a64371dc69714e78132af03bac874278b91bb87e"),
+            "uboot.bin": (573440, "0c743b303f129853edef7bb5c1c40d64a355ab03")
+          }
+          for name, (size, expected_sha) in expected.items():
+              data = (pathlib.Path("app/src/main/assets") / name).read_bytes()
+              actual = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\\0" + data).hexdigest()
+              assert len(data) == size and actual == expected_sha, f"{name}: upstream identity mismatch"
+              print(f"PASS {name}: {len(data)} bytes; Git blob SHA-1 {actual}")
+          PY
       - name: Build debug APK
         run: gradle :app:assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
