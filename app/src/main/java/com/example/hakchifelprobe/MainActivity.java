@@ -49,7 +49,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  v4.3 ALL-IN-ONE"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  v4.4 HARDWARE READ"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -260,7 +260,7 @@ public class MainActivity extends Activity {
     }catch(Exception e){report("FAIL: v4.3 flash read plan: "+e.getMessage());}
   }
   void runBundledAllV32(){
-    append("=== v4.3 ALL-IN-ONE: binaries, v4.2 U-Boot, v4.3 flash read plans and USB audit ===");
+    append("=== v4.4 ALL-IN-ONE: bundled binaries, protocol, USB and live loader-memory preflight ===");
     new Thread(()->{
       verifyBundledV32("FES1","fes1.bin",12624,"a64371dc69714e78132af03bac874278b91bb87e");
       verifyBundledV32("U-Boot","uboot.bin",573440,"0c743b303f129853edef7bb5c1c40d64a355ab03");
@@ -746,6 +746,56 @@ public class MainActivity extends Activity {
     finally{if(claimed)c.releaseInterface(iface);c.close();}
   }
 
+  void liveLoaderMemoryReadV44(){
+    report("=== v4.4 LIVE FEL loader-memory preflight (READ-ONLY) ===");
+    UsbDevice d=device;
+    if(d==null||!manager.hasPermission(d)){report("BLOCKED: USB permission required");return;}
+    UsbInterface iface=null;UsbEndpoint in=null,out=null;
+    for(int i=0;i<d.getInterfaceCount();i++){
+      UsbInterface it=d.getInterface(i);UsbEndpoint a=null,b=null;
+      for(int k=0;k<it.getEndpointCount();k++){
+        UsbEndpoint ep=it.getEndpoint(k);
+        if(ep.getType()!=UsbConstants.USB_ENDPOINT_XFER_BULK)continue;
+        if(ep.getAddress()==0x82)a=ep;
+        if(ep.getAddress()==0x01)b=ep;
+      }
+      if(a!=null&&b!=null){iface=it;in=a;out=b;break;}
+    }
+    if(iface==null){report("BLOCKED: expected FEL USB endpoints absent");return;}
+    UsbDeviceConnection c=manager.openDevice(d);
+    if(c==null){report("FAIL: could not open FEL USB connection");return;}
+    boolean claimed=false;
+    try{
+      claimed=c.claimInterface(iface,false);
+      if(!claimed)throw new Exception("USB interface claim failed");
+      felWriteRequest(c,out,in);
+      byte[] version=felRead(c,out,in,32);
+      byte[] vs=felRead(c,out,in,8);
+      if(!"AWUSBFEX".equals(new String(version,0,8,StandardCharsets.US_ASCII))||
+          vs[0]!=(byte)0xff||vs[1]!=(byte)0xff)
+        throw new Exception("FEL ROM identity or status mismatch");
+      int soc=(ByteBuffer.wrap(version).order(ByteOrder.LITTLE_ENDIAN).getInt(8)>>>8)&0xffff;
+      if(soc!=0x1667)throw new Exception("Unexpected SoC 0x"+Integer.toHexString(soc));
+      byte[] first=null;
+      for(int repeat=1;repeat<=2;repeat++){
+        byte[] req=felMessageV40(0x103,0x2000,128);
+        send(c,out,usbHeader(0x12,req.length));
+        send(c,out,req);
+        usbStatus(c,in);
+        byte[] current=felRead(c,out,in,128);
+        byte[] status=felRead(c,out,in,8);
+        if(status[0]!=(byte)0xff||status[1]!=(byte)0xff)
+          throw new Exception("FEL memory-read status invalid");
+        if(first!=null&&!Arrays.equals(first,current))
+          throw new Exception("Loader SRAM target changed between reads");
+        first=current;
+      }
+      report("PASS: live 128-byte SRAM read at FES1 destination 0x00002000, repeated 2/2");
+      report("SHA-256 of observed SRAM: "+hexDigest(MessageDigest.getInstance("SHA-256").digest(first)));
+      report("No memory writes, DRAM initialization, U-Boot execution or flash reads performed.");
+    }catch(Exception e){report("FAIL: v4.4 loader-memory preflight: "+e.getMessage());}
+    finally{if(claimed)c.releaseInterface(iface);c.close();}
+  }
   void identifyConsole(){
     UsbDevice d=device;
     if(d==null||!manager.hasPermission(d)){report("FAIL: FEL device or permission missing");return;}
@@ -906,6 +956,7 @@ public class MainActivity extends Activity {
     }else{
       fullDiagnostics();
       readScratchRam(5);
+      liveLoaderMemoryReadV44();
       identifyConsole();
       backupReadiness();
     }
