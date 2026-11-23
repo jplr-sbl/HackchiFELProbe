@@ -232,7 +232,7 @@ public class MainActivity extends Activity {
       }
       int offset=bootCommandOffsetV40(uboot);
       String cmd=flashReadCommandV30(0x600000L,0x400000L);
-      byte[] ascii=(cmd+"\\0").getBytes(StandardCharsets.US_ASCII);
+      byte[] ascii=(cmd+((char)0)).getBytes(StandardCharsets.US_ASCII);
       boolean valid=offset>=0&&offset+ascii.length<=uboot.length;
       report((valid?"PASS":"FAIL")+": U-Boot bootcmd patch location and command length");
       if(valid){
