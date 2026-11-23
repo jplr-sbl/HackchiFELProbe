@@ -101,7 +101,8 @@ public class MainActivity extends Activity {
     new AlertDialog.Builder(this).setTitle("Firmware backup: not yet supported")
       .setMessage("The FEL USB connection is verified, but internal storage access, partition discovery, backup integrity verification, and recovery are not implemented. No firmware writes will be attempted.")
       .setPositiveButton("OK",null).show();
-  }\n  Button button(LinearLayout root,String label,View.OnClickListener action) {
+  }
+  Button button(LinearLayout root,String label,View.OnClickListener action) {
     Button b=new Button(this); b.setText(label); b.setAllCaps(false); b.setOnClickListener(action); root.addView(b); return b;
   }
   void append(String s){log.append(s+"\n");}
