@@ -51,7 +51,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  v4.8 ALL STAGES"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  v4.9 ONE BUTTON"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -96,6 +96,7 @@ public class MainActivity extends Activity {
     button(advanced,"Read scratch RAM",v->new Thread(()->readScratchRam(1)).start());
     button(advanced,"RAM reliability ×5",v->new Thread(()->readScratchRam(5)).start());
     button(advanced,"Console identification",v->new Thread(()->identifyConsole()).start());
+    button(actions,"ONE BUTTON: Connect + verify NES Classic",v->confirmOneTapV49());
     button(actions,"Stage 2: FES1 SRAM loader (experimental)",v->confirmLoaderV45());
     button(actions,"Stage 3: Verify DRAM (read-only)",v->new Thread(()->runStage3V46()).start());
     button(actions,"Stage 4: Upload + verify U-Boot in DRAM",v->confirmUbootStageV47());
@@ -125,6 +126,36 @@ public class MainActivity extends Activity {
     if(Build.VERSION.SDK_INT>=33) registerReceiver(receiver,f,Context.RECEIVER_EXPORTED);
     else registerReceiver(receiver,f);
     scan();
+  }
+  volatile boolean oneTapRunningV49=false;
+  void confirmOneTapV49(){
+    if(oneTapRunningV49){report("One-button sequence is already running");return;}
+    new AlertDialog.Builder(this).setTitle("One-button NES Classic communication")
+      .setMessage("This runs the proven hardware communication sequence automatically: FES1 SRAM load/execute, DRAM check, and full U-Boot DRAM upload/readback. It changes volatile RAM and may require power cycling if communication fails. It DOES NOT execute U-Boot, read or edit internal flash, install games, or back up firmware. Proceed?")
+      .setNegativeButton("Cancel",null)
+      .setPositiveButton("Run communication sequence",(dialog,which)->new Thread(()->runOneTapV49()).start()).show();
+  }
+  void runOneTapV49(){
+    if(oneTapRunningV49)return;
+    oneTapRunningV49=true;
+    try{
+      report("=== ONE BUTTON: NES CLASSIC COMMUNICATION SEQUENCE ===");
+      if(device==null||!manager.hasPermission(device)){
+        report("STOP: Connect NES Classic in FEL mode and grant USB permission first");return;
+      }
+      dramVerifiedV46=false;ubootStagedV47=false;
+      report("STEP 1/3: Load FES1 and request DRAM initialization");
+      runLoaderV45();
+      try{Thread.sleep(2000);}catch(InterruptedException e){Thread.currentThread().interrupt();report("STOP: Interrupted");return;}
+      report("STEP 2/3: Verify preliminary DRAM communication");
+      runStage3V46();
+      if(!dramVerifiedV46){report("STOP: DRAM verification failed; U-Boot upload skipped");return;}
+      report("STEP 3/3: Upload U-Boot to DRAM and verify all bytes");
+      runUbootStageV47();
+      if(!ubootStagedV47){report("STOP: U-Boot upload/readback failed");return;}
+      report("PASS: ONE-BUTTON COMMUNICATION SEQUENCE COMPLETE");
+      report("NEXT DEVELOPMENT REQUIRED: U-Boot execution/reconnect and read-only flash access. Internal storage editing is NOT available in this build.");
+    }finally{oneTapRunningV49=false;}
   }
   void showAllStagesV48(){
     new AlertDialog.Builder(this).setTitle("One APK: all hardware stages")
