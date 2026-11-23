@@ -49,7 +49,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  v4.4 HARDWARE READ"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  v4.5 FES1 LOADER"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -93,6 +93,7 @@ public class MainActivity extends Activity {
     button(advanced,"Read scratch RAM",v->new Thread(()->readScratchRam(1)).start());
     button(advanced,"RAM reliability ×5",v->new Thread(()->readScratchRam(5)).start());
     button(advanced,"Console identification",v->new Thread(()->identifyConsole()).start());
+    button(advanced,"EXPERIMENTAL: Load and execute FES1 in SRAM",v->confirmLoaderV45());
     button(advanced,"Backup readiness assessment",v->new Thread(()->backupReadiness()).start());
     button(advanced,"Firmware backup requirements",v->showBackupRequirements());
     root.addView(advanced);
@@ -794,6 +795,108 @@ public class MainActivity extends Activity {
       report("SHA-256 of observed SRAM: "+hexDigest(MessageDigest.getInstance("SHA-256").digest(first)));
       report("No memory writes, DRAM initialization, U-Boot execution or flash reads performed.");
     }catch(Exception e){report("FAIL: v4.4 loader-memory preflight: "+e.getMessage());}
+    finally{if(claimed)c.releaseInterface(iface);c.close();}
+  }
+  static final String FES1_BLOB="a64371dc69714e78132af03bac874278b91bb87e";
+  byte[] verifiedFes1V45()throws Exception{
+    byte[] data;
+    try(InputStream in=getAssets().open("fes1.bin");ByteArrayOutputStream out=new ByteArrayOutputStream()){
+      byte[] buf=new byte[8192];int n;
+      while((n=in.read(buf))!=-1){if(n>0)out.write(buf,0,n);if(out.size()>12624)throw new Exception("Oversized loader");}
+      data=out.toByteArray();
+    }
+    if(data.length!=12624)throw new Exception("Unexpected FES1 length");
+    MessageDigest md=MessageDigest.getInstance("SHA-1");
+    md.update(("blob "+data.length+((char)0)).getBytes(StandardCharsets.US_ASCII));
+    md.update(data);
+    if(!FES1_BLOB.equals(hexDigest(md.digest())))throw new Exception("FES1 integrity check failed");
+    return data;
+  }
+  byte[] loaderReadV45(UsbDeviceConnection c,UsbEndpoint out,UsbEndpoint in,long address,int len)throws Exception{
+    if(len<=0||len>65536||(len&3)!=0)throw new Exception("Invalid read size");
+    byte[] req=felMessageV40(0x103,address,len);
+    send(c,out,usbHeader(0x12,16));send(c,out,req);usbStatus(c,in);
+    byte[] result=felRead(c,out,in,len);
+    byte[] st=felRead(c,out,in,8);
+    if(st[0]!=(byte)0xff||st[1]!=(byte)0xff)throw new Exception("FEL upload status invalid");
+    return result;
+  }
+  void loaderWriteV45(UsbDeviceConnection c,UsbEndpoint out,UsbEndpoint in,long address,byte[] data)throws Exception{
+    if(data.length==0||(data.length&3)!=0||data.length>65536)throw new Exception("Invalid write size");
+    byte[] req=felMessageV40(0x101,address,data.length);
+    send(c,out,usbHeader(0x12,16));send(c,out,req);usbStatus(c,in);
+    send(c,out,usbHeader(0x12,data.length));send(c,out,data);usbStatus(c,in);
+    byte[] st=felRead(c,out,in,8);
+    if(st[0]!=(byte)0xff||st[1]!=(byte)0xff)throw new Exception("FEL download status invalid");
+  }
+  void loaderExecuteV45(UsbDeviceConnection c,UsbEndpoint out,UsbEndpoint in,long address)throws Exception{
+    byte[] req=felMessageV40(0x102,address,0);
+    send(c,out,usbHeader(0x12,16));send(c,out,req);usbStatus(c,in);
+    byte[] st=felRead(c,out,in,8);
+    if(st[0]!=(byte)0xff||st[1]!=(byte)0xff)throw new Exception("FEL execute status invalid");
+  }
+  void confirmLoaderV45(){
+    new AlertDialog.Builder(this).setTitle("Execute FES1 loader in NES Classic RAM?")
+      .setMessage("Advanced experimental operation. Writes the verified Hakchi FES1 binary to console SRAM and executes it to initialize DRAM. This does NOT write internal flash, create a firmware backup, detect Hakchi, or manage games. The console may freeze or disconnect; power-cycle into FEL mode to recover. Proceed only if you accept that risk.")
+      .setNegativeButton("Cancel",null)
+      .setPositiveButton("Execute FES1", (dialog,which)->new Thread(()->runLoaderV45()).start()).show();
+  }
+  void runLoaderV45(){
+    report("=== EXPERIMENTAL FES1 SRAM LOAD AND EXECUTION ===");
+    UsbDevice d=device;
+    if(d==null||!manager.hasPermission(d)){report("BLOCKED: connect FEL and grant USB permission");return;}
+    UsbInterface iface=null;UsbEndpoint in=null,out=null;
+    for(int i=0;i<d.getInterfaceCount();i++){
+      UsbInterface it=d.getInterface(i);UsbEndpoint a=null,b=null;
+      for(int k=0;k<it.getEndpointCount();k++){
+        UsbEndpoint ep=it.getEndpoint(k);
+        if(ep.getType()!=UsbConstants.USB_ENDPOINT_XFER_BULK)continue;
+        if(ep.getAddress()==0x82)a=ep;
+        if(ep.getAddress()==0x01)b=ep;
+      }
+      if(a!=null&&b!=null){iface=it;in=a;out=b;break;}
+    }
+    if(iface==null){report("BLOCKED: FEL endpoints 0x01/0x82 not found");return;}
+    UsbDeviceConnection c=manager.openDevice(d);
+    if(c==null){report("FAIL: cannot open USB device");return;}
+    boolean claimed=false;
+    try{
+      byte[] loader=verifiedFes1V45();
+      claimed=c.claimInterface(iface,false);
+      if(!claimed)throw new Exception("USB claim failed");
+      felWriteRequest(c,out,in);
+      byte[] version=felRead(c,out,in,32),st=felRead(c,out,in,8);
+      if(!"AWUSBFEX".equals(new String(version,0,8,StandardCharsets.US_ASCII))||
+          st[0]!=(byte)0xff||st[1]!=(byte)0xff)throw new Exception("FEL identity mismatch");
+      int soc=(ByteBuffer.wrap(version).order(ByteOrder.LITTLE_ENDIAN).getInt(8)>>>8)&0xffff;
+      if(soc!=0x1667)throw new Exception("Unsupported SoC 0x"+Integer.toHexString(soc));
+      byte[] tail=loaderReadV45(c,out,in,0x2000+loader.length-128,128);
+      if(Arrays.equals(tail,Arrays.copyOfRange(loader,loader.length-128,loader.length))){
+        report("PASS: FES1 loader signature already present in SRAM; execution skipped");
+        return;
+      }
+      report("Verified original FES1; writing "+loader.length+" bytes to SRAM only");
+      int offset=0;
+      while(offset<loader.length){
+        int n=Math.min(4096,loader.length-offset);
+        byte[] chunk=Arrays.copyOfRange(loader,offset,offset+n);
+        loaderWriteV45(c,out,in,0x2000+offset,chunk);
+        offset+=n;
+      }
+      report("FES1 SRAM upload complete; verifying entire image by readback");
+      offset=0;
+      while(offset<loader.length){
+        int n=Math.min(4096,loader.length-offset);
+        byte[] read=loaderReadV45(c,out,in,0x2000+offset,n);
+        for(int i=0;i<n;i++)if(read[i]!=loader[offset+i])
+          throw new Exception("SRAM verification mismatch at offset "+(offset+i));
+        offset+=n;
+      }
+      report("PASS: entire FES1 image verified in SRAM");
+      report("Executing FES1 at 0x00002000 (no flash write)");
+      loaderExecuteV45(c,out,in,0x2000);
+      report("FES1 execution command acknowledged; DRAM initialization NOT YET VERIFIED");
+    }catch(Exception e){report("FAIL: FES1 loader stage: "+e.getMessage());}
     finally{if(claimed)c.releaseInterface(iface);c.close();}
   }
   void identifyConsole(){
