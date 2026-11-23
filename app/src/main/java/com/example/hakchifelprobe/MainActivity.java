@@ -23,6 +23,8 @@ public class MainActivity extends Activity {
   TextView status, log;
   Button permissionButton, probeButton;
   boolean auditWaitingForPermission=false;
+  volatile boolean auditRunning=false;
+  Button auditButton;
   final BroadcastReceiver receiver = new BroadcastReceiver() {
     @Override public void onReceive(Context c, Intent i) {
       if (!PERMISSION.equals(i.getAction())) return;
@@ -44,7 +46,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  1.3.1"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  1.4.1"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -55,7 +57,7 @@ public class MainActivity extends Activity {
 
     LinearLayout actions=new LinearLayout(this);
     actions.setOrientation(LinearLayout.VERTICAL);
-    button(actions,"Run complete READ-ONLY audit",v->beginAudit());
+    auditButton=button(actions,"Run complete READ-ONLY audit",v->beginAudit());
     button(actions,"Export JSON report",v->exportDiagnosticJson());
     root.addView(actions);
 
@@ -107,6 +109,7 @@ public class MainActivity extends Activity {
     scan();
   }
   void beginAudit(){
+    if(auditRunning||auditWaitingForPermission){append("Audit already running or waiting for USB permission.");return;}
     scan();
     if(device==null){append("BLOCKED: Connect NES Classic in FEL mode, then retry.");return;}
     if(!manager.hasPermission(device)){
@@ -118,8 +121,20 @@ public class MainActivity extends Activity {
     startAudit();
   }
   void startAudit(){
+    if(auditRunning)return;
+    auditRunning=true;
+    auditButton.setEnabled(false);
+    auditButton.setText("Running read-only audit...");
     append("USB permission confirmed; starting read-only audit.");
-    new Thread(()->runAllTests()).start();
+    new Thread(()->{
+      try{runAllTests();}
+      catch(Exception e){report("FAIL: Audit interrupted: "+e.getMessage());}
+      finally{runOnUiThread(()->{
+        auditRunning=false;
+        auditButton.setEnabled(true);
+        auditButton.setText("Run complete READ-ONLY audit");
+      });}
+    }).start();
   }
   void showBackupRequirements(){
     new AlertDialog.Builder(this).setTitle("Firmware backup: not yet supported")
@@ -437,7 +452,7 @@ public class MainActivity extends Activity {
     UsbDevice d=device;
     String deviceId=d==null?"not connected":String.format(Locale.US,"%04X:%04X",d.getVendorId(),d.getProductId());
     String payload="{\n"+
-      "  \"report_format\": \"hakchi-fel-probe-v1.3.1\",\n"+
+      "  \"report_format\": \"hakchi-fel-probe-v1.4.1\",\n"+
       "  \"device_id\": \""+deviceId+"\",\n"+
       "  \"usb_permission\": "+(d!=null&&manager.hasPermission(d))+",\n"+
       "  \"firmware_backup_created\": false,\n"+
@@ -464,6 +479,7 @@ public class MainActivity extends Activity {
       identifyConsole();
       backupReadiness();
     }
+    storageDiscoveryPreflight();
     auditCapabilities();
     report("=== REMAINING CAPABILITIES ===");
     report("NOT IMPLEMENTED: NAND/eMMC controller driver, storage discovery, partition map.");
@@ -471,6 +487,32 @@ public class MainActivity extends Activity {
     report("NOT VERIFIED: restore/recovery or game installation.");
     report("COMPLETE: All currently feasible non-destructive checks attempted.");
     report("Export JSON report to save these results.");
+  }
+  void storageDiscoveryPreflight(){
+    report("--- v1.4 storage discovery prerequisites (read-only) ---");
+    UsbDevice d=device;
+    if(d==null||!manager.hasPermission(d)){
+      report("BLOCKED: Storage prerequisite inspection requires USB permission.");
+      return;
+    }
+    int bulkIn=0,bulkOut=0;
+    for(int i=0;i<d.getInterfaceCount();i++){
+      UsbInterface it=d.getInterface(i);
+      for(int j=0;j<it.getEndpointCount();j++){
+        UsbEndpoint ep=it.getEndpoint(j);
+        if(ep.getType()==UsbConstants.USB_ENDPOINT_XFER_BULK){
+          if(ep.getDirection()==UsbConstants.USB_DIR_IN)bulkIn++;
+          else bulkOut++;
+        }
+      }
+    }
+    report("USB bulk endpoints: "+bulkIn+" IN, "+bulkOut+" OUT");
+    report("Boot ROM FEL transport: "+(bulkIn>0&&bulkOut>0?"AVAILABLE":"MISSING"));
+    report("Storage discovery mode: NOT AVAILABLE via standard FEL version/read commands");
+    report("Loader compatibility: UNVERIFIED for Allwinner R16/A33 (SoC 0x1667)");
+    report("Storage medium: UNKNOWN; no NAND/eMMC identification attempted");
+    report("NEXT REQUIRED IMPLEMENTATION: vetted, console-specific read-only RAM loader and protocol.");
+    report("No executable uploaded to console RAM and no storage command issued.");
   }
   void auditCapabilities(){
     report("--- Read-only capability audit ---");
