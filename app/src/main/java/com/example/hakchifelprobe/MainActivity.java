@@ -37,7 +37,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  1.2"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  1.3"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -48,12 +48,12 @@ public class MainActivity extends Activity {
 
     LinearLayout actions=new LinearLayout(this);
     actions.setOrientation(LinearLayout.VERTICAL);
-    button(actions,"Complete compatibility check",v->new Thread(()->runAllTests()).start());
+    button(actions,"Run complete READ-ONLY audit",v->new Thread(()->runAllTests()).start());
     button(actions,"Export JSON report",v->exportDiagnosticJson());
     root.addView(actions);
 
     TextView note=new TextView(this);
-    note.setText("READ-ONLY  •  Firmware backup and flashing are not available");
+    note.setText("READ-ONLY  •  Storage backup and flashing are not available");
     note.setTextSize(12);note.setTextColor(Color.YELLOW);
     note.setPadding(0,8,0,8);root.addView(note);
 
@@ -415,7 +415,7 @@ public class MainActivity extends Activity {
     UsbDevice d=device;
     String deviceId=d==null?"not connected":String.format(Locale.US,"%04X:%04X",d.getVendorId(),d.getProductId());
     String payload="{\n"+
-      "  \"report_format\": \"hakchi-fel-probe-v1.2\",\n"+
+      "  \"report_format\": \"hakchi-fel-probe-v1.3\",\n"+
       "  \"device_id\": \""+deviceId+"\",\n"+
       "  \"usb_permission\": "+(d!=null&&manager.hasPermission(d))+",\n"+
       "  \"firmware_backup_created\": false,\n"+
@@ -431,7 +431,7 @@ public class MainActivity extends Activity {
   }
 
   void runAllTests(){
-    report("=== FEL Probe v1.2: COMPLETE FEASIBLE CHECKS ===");
+    report("=== FEL Probe v1.3: COMPLETE READ-ONLY AUDIT ===");
     report("Hardware and software checks only; no storage commands or flashing.");
     softwarePreflight();
     if(device==null||!manager.hasPermission(device)){
@@ -442,12 +442,31 @@ public class MainActivity extends Activity {
       identifyConsole();
       backupReadiness();
     }
+    auditCapabilities();
     report("=== REMAINING CAPABILITIES ===");
     report("NOT IMPLEMENTED: NAND/eMMC controller driver, storage discovery, partition map.");
     report("NOT IMPLEMENTED: Hakchi installation identification, firmware extraction, backup verification.");
     report("NOT VERIFIED: restore/recovery or game installation.");
     report("COMPLETE: All currently feasible non-destructive checks attempted.");
     report("Export JSON report to save these results.");
+  }
+  void auditCapabilities(){
+    report("--- Read-only capability audit ---");
+    boolean fel=device!=null&&manager.hasPermission(device);
+    report("USB permission: "+(fel?"AVAILABLE":"BLOCKED"));
+    report("Boot ROM transport: "+(fel?"TESTED ABOVE":"BLOCKED"));
+    report("Internal storage enumeration: UNSUPPORTED (no FEL storage loader)");
+    report("NAND/eMMC controller access: UNSUPPORTED (requires device-specific RAM loader)");
+    report("Partition map: BLOCKED (storage not accessible)");
+    report("Existing Hakchi install: BLOCKED (filesystem not accessible)");
+    report("Firmware extraction: BLOCKED (storage not accessible)");
+    report("Backup SHA-256 integrity: BLOCKED (no firmware image to verify)");
+    report("Recovery compatibility: NOT TESTED (would require verified recovery path)");
+    report("Game installation compatibility: NOT TESTED (no filesystem access)");
+    report("SAF JSON export: AVAILABLE via Export JSON report button");
+    report("SAF firmware backup export: NOT IMPLEMENTED");
+    report("SAF firmware restore: DISABLED");
+    report("SAFETY: No writes, loader execution, firmware extraction, or recovery attempted.");
   }
   void softwarePreflight(){
     report("--- Software / backup preparation checks ---");
