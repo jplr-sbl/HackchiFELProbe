@@ -49,7 +49,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  v4.0"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  v4.3 ALL-IN-ONE"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -221,12 +221,52 @@ public class MainActivity extends Activity {
       report("Hardware stage requires verified memory writes, loader execution, reconnect, and recovery validation.");
     }catch(Exception e){report("FAIL: v4.0 protocol preview: "+e.getMessage());}
   }
+  void validateUbootSessionV42(){
+    report("=== v4.2 U-Boot session preflight (OFFLINE) ===");
+    try{
+      byte[] uboot;
+      try(InputStream in=getAssets().open("uboot.bin");ByteArrayOutputStream out=new ByteArrayOutputStream()){
+        byte[] buf=new byte[8192];int n;
+        while((n=in.read(buf))!=-1)if(n>0)out.write(buf,0,n);
+        uboot=out.toByteArray();
+      }
+      int offset=bootCommandOffsetV40(uboot);
+      String cmd=flashReadCommandV30(0x600000L,0x400000L);
+      byte[] ascii=(cmd+"\\0").getBytes(StandardCharsets.US_ASCII);
+      boolean valid=offset>=0&&offset+ascii.length<=uboot.length;
+      report((valid?"PASS":"FAIL")+": U-Boot bootcmd patch location and command length");
+      if(valid){
+        byte[] copy=uboot.clone();
+        System.arraycopy(ascii,0,copy,offset,ascii.length);
+        report((copy[offset]==ascii[0]&&copy[offset+ascii.length-1]==0?"PASS":"FAIL")+": command injected into RAM-only image copy");
+      }
+      report("Reconnect handling: NOT TESTED; console U-Boot execution: DISABLED.");
+    }catch(Exception e){report("FAIL: v4.2 preflight: "+e.getMessage());}
+  }
+  void validateFlashReadPlanV43(){
+    report("=== v4.3 flash read planning (OFFLINE, NO STORAGE ACCESS) ===");
+    try{
+      long[] offsets={0,0x600000L,0x2000000L};
+      long[] sizes={0x20000L,0x400000L,0x2000000L};
+      for(int i=0;i<offsets.length;i++){
+        String cmd=flashReadCommandV30(offsets[i],sizes[i]);
+        report("PASS: aligned read plan "+(i+1)+": "+cmd);
+      }
+      boolean rejected=false;
+      try{flashReadCommandV30(1,0x20000L);}catch(IllegalArgumentException e){rejected=true;}
+      report((rejected?"PASS":"FAIL")+": unaligned flash address rejected");
+      report("No flash reads performed. Storage capacity, partitions and Hakchi install remain UNKNOWN.");
+      report("Hardware read requires verified FES1 execution, U-Boot launch and reconnect; not enabled.");
+    }catch(Exception e){report("FAIL: v4.3 flash read plan: "+e.getMessage());}
+  }
   void runBundledAllV32(){
-    append("=== v4.0 ALL-IN-ONE: bundled binaries, FEL protocol, storage preview and USB audit ===");
+    append("=== v4.3 ALL-IN-ONE: binaries, v4.2 U-Boot, v4.3 flash read plans and USB audit ===");
     new Thread(()->{
       verifyBundledV32("FES1","fes1.bin",12624,"a64371dc69714e78132af03bac874278b91bb87e");
       verifyBundledV32("U-Boot","uboot.bin",573440,"0c743b303f129853edef7bb5c1c40d64a355ab03");
       storageSessionPreviewV40();
+      validateUbootSessionV42();
+      validateFlashReadPlanV43();
       report("=== Bundled binaries and v4.0 protocol preview complete; USB audit follows ===");
       runOnUiThread(()->beginAudit());
     }).start();
