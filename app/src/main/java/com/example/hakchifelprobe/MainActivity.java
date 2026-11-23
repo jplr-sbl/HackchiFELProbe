@@ -688,6 +688,15 @@ public class MainActivity extends Activity {
   @Override protected void onActivityResult(int request,int result,Intent data){
     super.onActivityResult(request,result,data);
     if(result!=RESULT_OK||data==null||data.getData()==null)return;
+    if(request==INSPECT_FES1){
+      Uri file=data.getData();
+      append("FES1 file selected; starting offline inspection.");
+      try{getContentResolver().takePersistableUriPermission(file,Intent.FLAG_GRANT_READ_URI_PERMISSION);}
+      catch(Exception e){append("FES1 access may need renewal: "+e.getMessage());}
+      getPreferences(MODE_PRIVATE).edit().putString("fes1_uri",file.toString()).apply();
+      new Thread(()->inspectFes1(file)).start();
+      return;
+    }
     if(request==INSPECT_LOADER){
       Uri file=data.getData();
       try{getContentResolver().takePersistableUriPermission(file,Intent.FLAG_GRANT_READ_URI_PERMISSION);}
