@@ -11,6 +11,7 @@ import java.util.*;
 import java.nio.*;
 import java.nio.charset.StandardCharsets;
 import java.io.OutputStream;
+import java.io.InputStream;
 import java.security.MessageDigest;
 import android.os.StatFs;
 import android.net.Uri;
@@ -46,7 +47,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  1.5.1"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  1.6.1"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -75,6 +76,7 @@ public class MainActivity extends Activity {
       advanced.setVisibility(show?View.VISIBLE:View.GONE);
       advancedToggle.setText(show?"Hide advanced tools  ▴":"Show advanced tools  ▾");
     });
+    button(advanced,"Inspect local loader file (NO EXECUTION)",v->selectLoaderFile());
     button(advanced,"Scan USB",v->scan());
     permissionButton=button(advanced,"Request USB permission",v->request());
     probeButton=button(advanced,"Open FEL interface",v->probe());
@@ -135,6 +137,42 @@ public class MainActivity extends Activity {
         auditButton.setText("Run complete READ-ONLY audit");
       });}
     }).start();
+  }
+  static final int INSPECT_LOADER=4106;
+  void selectLoaderFile(){
+    Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+    intent.addCategory(Intent.CATEGORY_OPENABLE);
+    intent.setType("*/*");
+    startActivityForResult(intent,INSPECT_LOADER);
+  }
+  void inspectLoaderFile(Uri uri){
+    report("--- v1.6 offline loader file inspection ---");
+    report("Inspection only: file stays on Android; never sent to the NES Classic.");
+    try(InputStream input=getContentResolver().openInputStream(uri)){
+      if(input==null)throw new Exception("Cannot open selected file");
+      MessageDigest digest=MessageDigest.getInstance("SHA-256");
+      byte[] buf=new byte[8192],head=new byte[64];long size=0;
+      int n;
+      while((n=input.read(buf))!=-1){
+        if(n==0)continue;
+        if(size+n>16L*1024*1024)throw new Exception("File exceeds 16 MiB inspection limit");
+        if(size<64)System.arraycopy(buf,0,head,(int)size,(int)Math.min(n,64-size));
+        digest.update(buf,0,n);size+=n;
+      }
+      if(size==0)throw new Exception("Empty file");
+      StringBuilder hash=new StringBuilder();
+      for(byte b:digest.digest())hash.append(String.format(Locale.US,"%02x",b&255));
+      report("File size: "+size+" bytes");
+      report("SHA-256: "+hash);
+      boolean elf=size>=20&&(head[0]&255)==0x7f&&head[1]=='E'&&head[2]=='L'&&head[3]=='F';
+      if(elf){
+        int machine=(head[18]&255)|((head[19]&255)<<8);
+        report("ELF header detected; machine ID "+machine+(machine==40?" (ARM)":" (not ARM32)"));
+        report("ELF architecture is not proof of compatibility or safety.");
+      }else report("Not identified as ELF; could be raw binary or unrelated file.");
+      report("Compatibility: UNVERIFIED; no trusted hash allowlist or code review");
+      report("Execution: DISABLED; storage access: NOT IMPLEMENTED");
+    }catch(Exception e){report("Loader inspection failed: "+e.getMessage());}
   }
   void showBackupRequirements(){
     new AlertDialog.Builder(this).setTitle("Firmware backup: not yet supported")
@@ -447,12 +485,14 @@ public class MainActivity extends Activity {
   }
   @Override protected void onActivityResult(int request,int result,Intent data){
     super.onActivityResult(request,result,data);
-    if(request!=EXPORT_DIAGNOSTICS||result!=RESULT_OK||data==null||data.getData()==null)return;
+    if(result!=RESULT_OK||data==null||data.getData()==null)return;
+    if(request==INSPECT_LOADER){Uri file=data.getData();new Thread(()->inspectLoaderFile(file)).start();return;}
+    if(request!=EXPORT_DIAGNOSTICS)return;
     Uri uri=data.getData();
     UsbDevice d=device;
     String deviceId=d==null?"not connected":String.format(Locale.US,"%04X:%04X",d.getVendorId(),d.getProductId());
     String payload="{\n"+
-      "  \"report_format\": \"hakchi-fel-probe-v1.4.1\",\n"+
+      "  \"report_format\": \"hakchi-fel-probe-v1.6\",\n"+
       "  \"device_id\": \""+deviceId+"\",\n"+
       "  \"usb_permission\": "+(d!=null&&manager.hasPermission(d))+",\n"+
       "  \"firmware_backup_created\": false,\n"+
