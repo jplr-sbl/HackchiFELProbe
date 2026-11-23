@@ -12,6 +12,7 @@ import java.nio.*;
 import java.nio.charset.StandardCharsets;
 import java.io.OutputStream;
 import java.io.InputStream;
+import java.io.ByteArrayOutputStream;
 import java.security.MessageDigest;
 import java.util.zip.CRC32;
 import android.os.StatFs;
@@ -48,7 +49,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  1.7"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  1.8 + 1.9"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -77,7 +78,7 @@ public class MainActivity extends Activity {
       advanced.setVisibility(show?View.VISIBLE:View.GONE);
       advancedToggle.setText(show?"Hide advanced tools  ▴":"Show advanced tools  ▾");
     });
-    button(advanced,"Analyze U-Boot / loader file (OFFLINE)",v->selectLoaderFile());
+    button(advanced,"Analyze loader + storage readiness",v->selectLoaderFile());
     button(advanced,"Scan USB",v->scan());
     permissionButton=button(advanced,"Request USB permission",v->request());
     probeButton=button(advanced,"Open FEL interface",v->probe());
@@ -154,12 +155,13 @@ public class MainActivity extends Activity {
     return x.toString();
   }
   void inspectLoaderFile(Uri uri){
-    report("--- v1.7 offline U-Boot / loader analyzer ---");
+    report("--- v1.8 embedded binary analysis + v1.9 storage readiness ---");
     report("Local inspection only; no USB transfers, RAM writes, boot or flash commands.");
     try(InputStream input=getContentResolver().openInputStream(uri)){
       if(input==null)throw new Exception("Cannot open selected file");
       MessageDigest digest=MessageDigest.getInstance("SHA-256");
       byte[] buf=new byte[8192],head=new byte[512];long size=0;
+      ByteArrayOutputStream captured=new ByteArrayOutputStream();
       int n;CRC32 payloadCrc=new CRC32();
       while((n=input.read(buf))!=-1){
         if(n==0)continue;
@@ -168,6 +170,7 @@ public class MainActivity extends Activity {
         // Legacy U-Boot uImage payload begins at offset 64.
         long from=Math.max(size,64),to=size+n;
         if(to>from)payloadCrc.update(buf,(int)(from-size),(int)(to-from));
+        captured.write(buf,0,n);
         digest.update(buf,0,n);size+=n;
       }
       if(size==0)throw new Exception("Empty file");
@@ -216,9 +219,50 @@ public class MainActivity extends Activity {
         report("No recognized ELF, legacy uImage, eGON.BT0 or TOC0 signature at expected offsets.");
         report("Raw U-Boot binaries can lack recognizable headers; this is not a file integrity failure.");
       }
+      byte[] all=captured.toByteArray();
+      report("--- v1.8 embedded signature scan (entire selected file) ---");
+      scanSignature(all,"U-Boot",new byte[]{'U','-','B','o','o','t'});
+      scanSignature(all,"Allwinner eGON.BT0",new byte[]{'e','G','O','N','.','B','T','0'});
+      scanSignature(all,"Allwinner TOC0.GLH",new byte[]{'T','O','C','0','.','G','L','H'});
+      scanSignature(all,"Legacy uImage magic",new byte[]{0x27,0x05,0x19,0x56});
+      scanSignature(all,"ELF header",new byte[]{0x7f,'E','L','F'});
+      report("--- v1.8 printable identification strings ---");
+      StringBuilder run=new StringBuilder();int shown=0;
+      for(int i=0;i<=all.length;i++){
+        int c=i==all.length?0:all[i]&255;
+        if(c>=32&&c<=126&&run.length()<512)run.append((char)c);
+        else {
+          if(run.length()>=8){
+            String value=run.toString();
+            String low=value.toLowerCase(Locale.US);
+            if((low.contains("u-boot")||low.contains("allwinner")||low.contains("sunxi")||low.contains("nand")||low.contains("mmc")||low.contains("fel"))&&shown<12){
+              report("String at ~0x"+Integer.toHexString(Math.max(0,i-run.length()))+": "+value.substring(0,Math.min(value.length(),120)));
+              shown++;
+            }
+          }
+          run.setLength(0);
+        }
+      }
+      if(shown==0)report("No recognizable bootloader/hardware identification strings found.");
+      report("String matches are clues only, not proof of file origin, CPU support or safe execution.");
+      report("--- v1.9 loader / storage readiness ---");
+      report("File integrity fingerprint: AVAILABLE (SHA-256 above)");
+      report("Known-good loader hash comparison: NOT AVAILABLE (no vetted allowlist)");
+      report("Storage access protocol: NOT IMPLEMENTED");
+      report("Storage controller / partition discovery: NOT ATTEMPTED");
+      report("Readiness: BLOCKED pending independent compatibility validation.");
       report("NES Classic compatibility: NOT VERIFIED (format checks are not a hardware allowlist)");
       report("Loader execution: DISABLED; internal storage access: NOT IMPLEMENTED");
     }catch(Exception e){report("File analysis failed: "+e.getMessage());}
+  }
+  void scanSignature(byte[] data,String label,byte[] needle){
+    int first=-1,count=0;
+    for(int i=0;i<=data.length-needle.length;i++){
+      boolean match=true;
+      for(int j=0;j<needle.length;j++)if(data[i+j]!=needle[j]){match=false;break;}
+      if(match){if(first<0)first=i;count++;}
+    }
+    report(label+": "+(count==0?"not found":"found "+count+" occurrence(s), first offset 0x"+Integer.toHexString(first)));
   }
   void showBackupRequirements(){
     new AlertDialog.Builder(this).setTitle("Firmware backup: not yet supported")
@@ -554,7 +598,7 @@ public class MainActivity extends Activity {
   }
 
   void runAllTests(){
-    report("=== FEL Probe v1.3: COMPLETE READ-ONLY AUDIT ===");
+    report("=== FEL Probe v1.8/1.9: COMPLETE READ-ONLY AUDIT ===");
     report("Hardware and software checks only; no storage commands or flashing.");
     softwarePreflight();
     if(device==null||!manager.hasPermission(device)){
@@ -567,6 +611,7 @@ public class MainActivity extends Activity {
     }
     verifyStorageLoaderCompatibilityGate();
     storageDiscoveryPreflight();
+    storageAccessGateV19();
     auditCapabilities();
     report("=== REMAINING CAPABILITIES ===");
     report("NOT IMPLEMENTED: NAND/eMMC controller driver, storage discovery, partition map.");
@@ -641,6 +686,20 @@ public class MainActivity extends Activity {
     report("Storage medium: UNKNOWN; no NAND/eMMC identification attempted");
     report("NEXT REQUIRED IMPLEMENTATION: vetted, console-specific read-only RAM loader and protocol.");
     report("No executable uploaded to console RAM and no storage command issued.");
+  }
+  void storageAccessGateV19(){
+    report("--- v1.9 internal storage access safety gate ---");
+    boolean usb=device!=null&&manager.hasPermission(device);
+    report("USB FEL device permission: "+(usb?"PASS":"BLOCKED"));
+    report("Boot ROM FEL version and scratch RAM access: "+(usb?"AVAILABLE; see audit results":"NOT AVAILABLE"));
+    report("Reviewed console-specific storage loader: MISSING");
+    report("Verified loader hash allowlist: EMPTY");
+    report("Documented read-only storage command protocol: MISSING");
+    report("NAND/eMMC controller initialization: NOT IMPLEMENTED");
+    report("Read-only storage capacity and identity: NOT DETECTED");
+    report("Partition enumeration: BLOCKED");
+    report("DECISION: DENY loader execution and storage access until all prerequisites are validated.");
+    report("No storage commands, RAM uploads, firmware changes or writes performed.");
   }
   void auditCapabilities(){
     report("--- Read-only capability audit ---");
