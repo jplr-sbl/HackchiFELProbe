@@ -48,7 +48,8 @@ public class MainActivity extends Activity {
     scroll.addView(log); root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
     button(root,"4. Read FEL version (read-only)",v->readFelVersion(1));
     button(root,"5. Reliability test: 5 version reads",v->readFelVersion(5));
-    button(root,"6. Read 16 bytes of FEL scratch RAM",v->new Thread(()->readScratchRam()).start());
+    button(root,"6. Read 16 bytes of FEL scratch RAM",v->new Thread(()->readScratchRam(1)).start());
+    button(root,"7. RAM reliability test: 5 reads",v->new Thread(()->readScratchRam(5)).start());
     button(root,"Share log",v->{Intent i=new Intent(Intent.ACTION_SEND);i.setType("text/plain");i.putExtra(Intent.EXTRA_TEXT,log.getText().toString());startActivity(Intent.createChooser(i,"Share diagnostic log"));});
     setContentView(root);
     IntentFilter f=new IntentFilter(PERMISSION);
@@ -191,7 +192,7 @@ public class MainActivity extends Activity {
   }
 
   void report(String message){runOnUiThread(()->append(message));}
-  void readScratchRam(){
+  void readScratchRam(int repeats){
     if(device==null||!manager.hasPermission(device)){report("FAIL: FEL device or USB permission missing");return;}
     UsbInterface iface=null;UsbEndpoint in=null,out=null;
     for(int i=0;i<device.getInterfaceCount();i++){
@@ -222,21 +223,32 @@ public class MainActivity extends Activity {
       long scratch=ByteBuffer.wrap(version).order(ByteOrder.LITTLE_ENDIAN).getInt(20)&0xffffffffL;
       if(scratch==0||scratch>0x100000||scratch%4!=0)
         throw new Exception("Scratch address outside conservative range: 0x"+Long.toHexString(scratch));
-      report(String.format(Locale.US,"Reading 16 bytes at FEL scratch address 0x%08X (read-only)",scratch));
-      ByteBuffer req=ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
-      req.putInt(0x103); // AW_FEL_1_READ
-      req.putInt((int)scratch);
-      req.putInt(16);
-      req.putInt(0);
-      send(c,out,usbHeader(0x12,16));
-      send(c,out,req.array());
-      usbStatus(c,in);
-      byte[] data=felRead(c,out,in,16);
-      byte[] status=felRead(c,out,in,8);
-      if(status[0]!=(byte)0xff||status[1]!=(byte)0xff)
-        throw new Exception("Unexpected read status: "+hex(status));
-      report("RAM bytes: "+hex(data));
-      report("PASS: FEL read-only RAM transfer completed (16 bytes)");
+      report(String.format(Locale.US,"FEL v0.5: %d read-only RAM read(s) at 0x%08X",repeats,scratch));
+      byte[] baseline=null;
+      long totalNs=0;
+      for(int test=1;test<=repeats;test++){
+        ByteBuffer req=ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
+        req.putInt(0x103); // AW_FEL_1_READ, never write or execute
+        req.putInt((int)scratch);
+        req.putInt(16);
+        req.putInt(0);
+        long started=System.nanoTime();
+        send(c,out,usbHeader(0x12,16));
+        send(c,out,req.array());
+        usbStatus(c,in);
+        byte[] data=felRead(c,out,in,16);
+        byte[] status=felRead(c,out,in,8);
+        long elapsed=System.nanoTime()-started;
+        totalNs+=elapsed;
+        if(status[0]!=(byte)0xff||status[1]!=(byte)0xff)
+          throw new Exception("Unexpected read status on "+test+": "+hex(status));
+        if(baseline!=null&&!Arrays.equals(baseline,data))
+          throw new Exception("RAM contents differed on read "+test+"; memory may be changing");
+        baseline=data;
+        report(String.format(Locale.US,"PASS RAM %d/%d: %.2f ms",test,repeats,elapsed/1000000.0));
+      }
+      report("RAM bytes: "+hex(baseline));
+      report(String.format(Locale.US,"PASS: %d/%d matching RAM reads; average %.2f ms; no memory writes.",repeats,repeats,totalNs/1000000.0/repeats));
     }catch(Exception e){report("FAIL: FEL RAM read: "+e.getMessage());}
     finally{if(claimed)c.releaseInterface(iface);c.close();}
   }
