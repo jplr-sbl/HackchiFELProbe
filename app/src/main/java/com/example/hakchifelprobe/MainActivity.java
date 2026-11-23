@@ -51,7 +51,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  v5.0 FLASH READ EXPERIMENT"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  v5.1 FLASH EXPORT"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -101,6 +101,7 @@ public class MainActivity extends Activity {
     button(actions,"Stage 3: Verify DRAM (read-only)",v->new Thread(()->runStage3V46()).start());
     button(actions,"Stage 4: Upload + verify U-Boot in DRAM",v->confirmUbootStageV47());
     button(actions,"Stage 5: EXPERIMENTAL read first flash sector",v->confirmFlashReadV50());
+    button(actions,"Export captured flash sector (SHA-256 verified)",v->exportFlashSectorV51());
     button(actions,"Storage / backup / Hakchi status",v->new Thread(()->runStage5V46()).start());
     button(advanced,"Backup readiness assessment",v->new Thread(()->backupReadiness()).start());
     button(advanced,"Firmware backup requirements",v->showBackupRequirements());
@@ -159,6 +160,45 @@ public class MainActivity extends Activity {
     }finally{oneTapRunningV49=false;}
   }
   // Experimental first-sector flash read, never writes persistent storage.
+  static final int EXPORT_FLASH_SECTOR_V51=6501;
+  void exportFlashSectorV51(){
+    java.io.File file=new java.io.File(getFilesDir(),"nes-flash-sector0-128k.bin");
+    if(!file.isFile()||file.length()!=131072){report("No verified 128 KiB flash-sector capture available to export");return;}
+    Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);
+    intent.addCategory(Intent.CATEGORY_OPENABLE);
+    intent.setType("application/octet-stream");
+    intent.putExtra(Intent.EXTRA_TITLE,"nes-classic-flash-sector0-128k.bin");
+    startActivityForResult(intent,EXPORT_FLASH_SECTOR_V51);
+  }
+  void writeFlashSectorExportV51(Uri target){
+    try{
+      java.io.File source=new java.io.File(getFilesDir(),"nes-flash-sector0-128k.bin");
+      if(!source.isFile()||source.length()!=131072)throw new Exception("Capture absent or incomplete");
+      byte[] expected;
+      try(InputStream in=new java.io.FileInputStream(source)){
+        MessageDigest digest=MessageDigest.getInstance("SHA-256");
+        byte[] b=new byte[8192];int n;
+        while((n=in.read(b))!=-1)digest.update(b,0,n);
+        expected=digest.digest();
+      }
+      try(InputStream in=new java.io.FileInputStream(source);OutputStream out=getContentResolver().openOutputStream(target,"w")){
+        if(out==null)throw new Exception("Cannot open selected destination");
+        byte[] b=new byte[8192];int n;
+        while((n=in.read(b))!=-1)out.write(b,0,n);
+        out.flush();
+      }
+      MessageDigest verify=MessageDigest.getInstance("SHA-256");
+      int total=0;
+      try(InputStream in=getContentResolver().openInputStream(target)){
+        if(in==null)throw new Exception("Cannot reopen exported file");
+        byte[] b=new byte[8192];int n;
+        while((n=in.read(b))!=-1){verify.update(b,0,n);total+=n;}
+      }
+      if(total!=131072||!Arrays.equals(expected,verify.digest()))throw new Exception("Export checksum mismatch");
+      report("PASS: 128 KiB flash-sector export re-read and SHA-256 verified");
+      report("This is NOT a full firmware backup. Do not use it for restoration.");
+    }catch(Exception e){report("FLASH EXPORT FAILED: "+e.getMessage());}
+  }
   void confirmFlashReadV50(){
     if(!ubootStagedV47){report("STOP: U-Boot must be staged and verified in this session first");return;}
     new AlertDialog.Builder(this).setTitle("Read NES Classic internal flash?")
@@ -1289,6 +1329,7 @@ public class MainActivity extends Activity {
   @Override protected void onActivityResult(int request,int result,Intent data){
     super.onActivityResult(request,result,data);
     if(result!=RESULT_OK||data==null||data.getData()==null)return;
+    if(request==EXPORT_FLASH_SECTOR_V51){Uri target=data.getData();new Thread(()->writeFlashSectorExportV51(target)).start();return;}
     if(request==INSPECT_FES1){
       Uri file=data.getData();
       append("FES1 file selected; starting offline inspection.");
