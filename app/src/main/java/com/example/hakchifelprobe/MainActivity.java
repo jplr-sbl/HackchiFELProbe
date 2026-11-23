@@ -32,38 +32,72 @@ public class MainActivity extends Activity {
     manager=(UsbManager)getSystemService(USB_SERVICE);
     LinearLayout root=new LinearLayout(this);
     root.setOrientation(LinearLayout.VERTICAL);
-    root.setPadding(22,30,22,20);
+    root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL PROBE"); title.setTextSize(24); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  1.0"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
-    status=new TextView(this); status.setTextColor(Color.WHITE); status.setTextSize(16);
-    status.setPadding(0,20,0,20); root.addView(status);
-    button(root,"1. Scan USB",v->scan());
-    permissionButton=button(root,"2. Request USB permission",v->request());
-    probeButton=button(root,"3. Open FEL interface",v->probe());
+    TextView subtitle=new TextView(this);
+    subtitle.setText("NES Classic  /  Android USB toolkit");
+    subtitle.setTextColor(Color.LTGRAY); subtitle.setTextSize(12);
+    root.addView(subtitle);
+    status=new TextView(this); status.setTextColor(Color.WHITE); status.setTextSize(14);
+    status.setPadding(0,12,0,12);root.addView(status);
+
+    LinearLayout actions=new LinearLayout(this);
+    actions.setOrientation(LinearLayout.VERTICAL);
+    button(actions,"Run all diagnostics",v->new Thread(()->fullDiagnostics()).start());
+    button(actions,"Export JSON report",v->exportDiagnosticJson());
+    root.addView(actions);
+
     TextView note=new TextView(this);
-    note.setText("Read-only FEL diagnostics. No firmware writes or flashing. A successful USB connection alone does not verify storage access.");
-    note.setTextColor(Color.YELLOW); root.addView(note);
+    note.setText("READ-ONLY  •  Firmware backup and flashing are not available");
+    note.setTextSize(12);note.setTextColor(Color.YELLOW);
+    note.setPadding(0,8,0,8);root.addView(note);
+
+    Button advancedToggle=button(root,"Show advanced tools  ▾",null);
+    LinearLayout advanced=new LinearLayout(this);
+    advanced.setOrientation(LinearLayout.VERTICAL);
+    advanced.setVisibility(View.GONE);
+    advancedToggle.setOnClickListener(v->{
+      boolean show=advanced.getVisibility()!=View.VISIBLE;
+      advanced.setVisibility(show?View.VISIBLE:View.GONE);
+      advancedToggle.setText(show?"Hide advanced tools  ▴":"Show advanced tools  ▾");
+    });
+    button(advanced,"Scan USB",v->scan());
+    permissionButton=button(advanced,"Request USB permission",v->request());
+    probeButton=button(advanced,"Open FEL interface",v->probe());
+    button(advanced,"Read FEL version",v->new Thread(()->readFelVersion(1)).start());
+    button(advanced,"Version reliability ×5",v->new Thread(()->readFelVersion(5)).start());
+    button(advanced,"Read scratch RAM",v->new Thread(()->readScratchRam(1)).start());
+    button(advanced,"RAM reliability ×5",v->new Thread(()->readScratchRam(5)).start());
+    button(advanced,"Console identification",v->new Thread(()->identifyConsole()).start());
+    button(advanced,"Backup readiness assessment",v->new Thread(()->backupReadiness()).start());
+    button(advanced,"Firmware backup requirements",v->showBackupRequirements());
+    root.addView(advanced);
+    TextView logTitle=new TextView(this);
+    logTitle.setText("SESSION LOG");logTitle.setTextSize(12);
+    logTitle.setTextColor(Color.LTGRAY);logTitle.setPadding(0,10,0,6);
+    root.addView(logTitle);
     ScrollView scroll=new ScrollView(this);
-    log=new TextView(this); log.setTextColor(Color.GREEN); log.setTextIsSelectable(true);
-    scroll.addView(log); root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
-    button(root,"4. Read FEL version (read-only)",v->readFelVersion(1));
-    button(root,"5. Reliability test: 5 version reads",v->readFelVersion(5));
-    button(root,"6. Read 16 bytes of FEL scratch RAM",v->new Thread(()->readScratchRam(1)).start());
-    button(root,"7. RAM reliability test: 5 reads",v->new Thread(()->readScratchRam(5)).start());
-    button(root,"8. Console identification report",v->new Thread(()->identifyConsole()).start());
-    button(root,"9. Backup readiness assessment",v->new Thread(()->backupReadiness()).start());
-    button(root,"10. Export diagnostic report (JSON)",v->exportDiagnosticJson());
-    button(root,"11. Run full read-only diagnostics",v->new Thread(()->fullDiagnostics()).start());
-    button(root,"Share log",v->{Intent i=new Intent(Intent.ACTION_SEND);i.setType("text/plain");i.putExtra(Intent.EXTRA_TEXT,log.getText().toString());startActivity(Intent.createChooser(i,"Share diagnostic log"));});
+    log=new TextView(this); log.setTextColor(Color.GREEN); log.setTextSize(12);
+    log.setTextIsSelectable(true);log.setPadding(8,8,8,8);
+    scroll.addView(log);
+    root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+    LinearLayout footer=new LinearLayout(this);
+    footer.setOrientation(LinearLayout.HORIZONTAL);
+    Button share=button(footer,"Share log",v->{Intent i=new Intent(Intent.ACTION_SEND);i.setType("text/plain");i.putExtra(Intent.EXTRA_TEXT",log.getText().toString());startActivity(Intent.createChooser(i,"Share diagnostic log"));});
+    Button clear=button(footer,"Clear log",v->log.setText(""));
+    share.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
+    clear.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
+    root.addView(footer);
     setContentView(root);
     IntentFilter f=new IntentFilter(PERMISSION);
     if(Build.VERSION.SDK_INT>=33) registerReceiver(receiver,f,Context.RECEIVER_EXPORTED);
     else registerReceiver(receiver,f);
     scan();
   }
-  Button button(LinearLayout root,String label,View.OnClickListener action) {
+  void showBackupRequirements(){\n    new AlertDialog.Builder(this).setTitle("Firmware backup: not yet supported")\n      .setMessage("The FEL USB connection is verified, but internal storage access, partition discovery, backup integrity verification, and recovery are not implemented. No firmware writes will be attempted.")\n      .setPositiveButton("OK",null).show();\n  }\n  Button button(LinearLayout root,String label,View.OnClickListener action) {
     Button b=new Button(this); b.setText(label); b.setAllCaps(false); b.setOnClickListener(action); root.addView(b); return b;
   }
   void append(String s){log.append(s+"\n");}
