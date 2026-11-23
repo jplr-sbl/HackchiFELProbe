@@ -49,7 +49,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  v3.2 ALL-IN-ONE"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  v4.0"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -61,6 +61,7 @@ public class MainActivity extends Activity {
     LinearLayout actions=new LinearLayout(this);
     actions.setOrientation(LinearLayout.VERTICAL);
     auditButton=button(actions,"Run ALL built-in checks",v->runBundledAllV32());
+    button(actions,"v4.0 Preview read-only storage session",v->new Thread(()->storageSessionPreviewV40()).start());
 
 
 
@@ -168,6 +169,58 @@ public class MainActivity extends Activity {
     else selectLoaderFile();
   }
 
+  static byte[] felMessageV40(int command,long address,long length){
+    if(command<0||command>65535||address<0||address>0xffffffffL||length<0||length>0xffffffffL)
+      throw new IllegalArgumentException("FEL message field out of range");
+    ByteBuffer b=ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
+    b.putShort((short)command);b.putShort((short)0);
+    b.putInt((int)address);b.putInt((int)length);b.putInt(0);
+    return b.array();
+  }
+  static byte[] awUsbHeaderV40(boolean read,int length){
+    if(length<0||length>0x2000000)throw new IllegalArgumentException("Invalid AWUSB length");
+    ByteBuffer b=ByteBuffer.allocate(32).order(ByteOrder.LITTLE_ENDIAN);
+    b.put(new byte[]{'A','W','U','C'});
+    b.putInt(0);b.putInt(length);
+    b.position(15);b.put((byte)0x0c);b.put((byte)(read?0x11:0x12));
+    b.position(18);b.putInt(length);
+    return b.array();
+  }
+  static int bootCommandOffsetV40(byte[] data){
+    byte[] needle="bootcmd=".getBytes(StandardCharsets.US_ASCII);
+    for(int i=0;i<=data.length-needle.length;i++){
+      boolean match=true;
+      for(int j=0;j<needle.length;j++)if(data[i+j]!=needle[j]){match=false;break;}
+      if(match)return i+needle.length;
+    }
+    return -1;
+  }
+  void storageSessionPreviewV40(){
+    report("=== v4.0 read-only storage session engineering preview ===");
+    report("Mode: OFFLINE protocol validation; hardware execution disabled.");
+    try{
+      byte[] upload=felMessageV40(0x0101,0x47000000L,0x20);
+      byte[] header=awUsbHeaderV40(false,16);
+      boolean fields=upload.length==16&&ByteBuffer.wrap(upload).order(ByteOrder.LITTLE_ENDIAN).getInt(4)==0x47000000;
+      boolean envelope=header.length==32&&header[0]=='A'&&header[3]=='C'&&header[15]==12&&header[16]==0x12;
+      report((fields?"PASS":"FAIL")+": 16-byte FEL little-endian message encoding");
+      report((envelope?"PASS":"FAIL")+": 32-byte AWUSB transport envelope encoding");
+      byte[] uboot;
+      try(InputStream input=getAssets().open("uboot.bin");ByteArrayOutputStream out=new ByteArrayOutputStream()){
+        byte[] b=new byte[8192];int n;
+        while((n=input.read(b))!=-1){if(n>0)out.write(b,0,n);}
+        uboot=out.toByteArray();
+      }
+      int offset=bootCommandOffsetV40(uboot);
+      String command=flashReadCommandV30(0x600000L,0x400000L);
+      boolean fits=offset>=0&&offset+command.length()+1<uboot.length;
+      report((fits?"PASS":"FAIL")+": U-Boot bootcmd field located; command fits within image (offset "+offset+")");
+      report("Prepared flash READ command: "+command);
+      report("Planned transfer buffer: 0x47400000; planned read length: 0x400000 bytes");
+      report("DRAM init: NOT EXECUTED; U-Boot: NOT EXECUTED; storage: NOT ACCESSED.");
+      report("Hardware stage requires verified memory writes, loader execution, reconnect, and recovery validation.");
+    }catch(Exception e){report("FAIL: v4.0 protocol preview: "+e.getMessage());}
+  }
   void runBundledAllV32(){
     append("=== v3.2 bundled Hakchi binaries + offline protocol + USB audit ===");
     new Thread(()->{
