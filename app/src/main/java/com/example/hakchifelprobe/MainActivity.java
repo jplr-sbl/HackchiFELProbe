@@ -43,7 +43,7 @@ public class MainActivity extends Activity {
     permissionButton=button(root,"2. Request USB permission",v->request());
     probeButton=button(root,"3. Open FEL interface",v->probe());
     TextView note=new TextView(this);
-    note.setText("Read-only connection test. No firmware writes or FEL commands. A successful claim does not prove FEL protocol communication.");
+    note.setText("Read-only FEL diagnostics. No firmware writes or flashing. A successful USB connection alone does not verify storage access.");
     note.setTextColor(Color.YELLOW); root.addView(note);
     ScrollView scroll=new ScrollView(this);
     log=new TextView(this); log.setTextColor(Color.GREEN); log.setTextIsSelectable(true);
@@ -55,6 +55,7 @@ public class MainActivity extends Activity {
     button(root,"8. Console identification report",v->new Thread(()->identifyConsole()).start());
     button(root,"9. Backup readiness assessment",v->new Thread(()->backupReadiness()).start());
     button(root,"10. Export diagnostic report (JSON)",v->exportDiagnosticJson());
+    button(root,"11. Run full read-only diagnostics",v->new Thread(()->fullDiagnostics()).start());
     button(root,"Share log",v->{Intent i=new Intent(Intent.ACTION_SEND);i.setType("text/plain");i.putExtra(Intent.EXTRA_TEXT,log.getText().toString());startActivity(Intent.createChooser(i,"Share diagnostic log"));});
     setContentView(root);
     IntentFilter f=new IntentFilter(PERMISSION);
@@ -386,6 +387,74 @@ public class MainActivity extends Activity {
       stream.write(payload.getBytes(StandardCharsets.UTF_8));
       append("PASS: Diagnostic JSON exported (not a firmware backup)");
     }catch(Exception e){append("FAIL: JSON export: "+e.getMessage());}
+  }
+
+  void fullDiagnostics(){
+    UsbDevice d=device;
+    report("=== FEL Probe v0.9 full read-only diagnostics ===");
+    if(d==null||!manager.hasPermission(d)){report("FAIL: Connect FEL device and grant USB permission");return;}
+    report(String.format(Locale.US,"USB: %04X:%04X; interfaces: %d",d.getVendorId(),d.getProductId(),d.getInterfaceCount()));
+    UsbInterface iface=null;UsbEndpoint in=null,out=null;
+    for(int i=0;i<d.getInterfaceCount();i++){
+      UsbInterface it=d.getInterface(i);UsbEndpoint a=null,b=null;
+      for(int k=0;k<it.getEndpointCount();k++){
+        UsbEndpoint ep=it.getEndpoint(k);
+        if(ep.getType()!=UsbConstants.USB_ENDPOINT_XFER_BULK)continue;
+        if(ep.getDirection()==UsbConstants.USB_DIR_IN)a=ep;else b=ep;
+      }
+      if(a!=null&&b!=null){iface=it;in=a;out=b;break;}
+    }
+    if(iface==null){report("FAIL: No bulk USB interface");return;}
+    report(String.format(Locale.US,"USB endpoints: OUT 0x%02X, IN 0x%02X",out.getAddress(),in.getAddress()));
+    UsbDeviceConnection c=manager.openDevice(d);
+    if(c==null){report("FAIL: Cannot open USB device");return;}
+    boolean claimed=false;
+    try{
+      claimed=c.claimInterface(iface,false);
+      if(!claimed)throw new Exception("Cannot claim interface");
+      byte[] baseline=null;long scratch=0;int soc=0,protocol=0;
+      for(int i=1;i<=3;i++){
+        felWriteRequest(c,out,in);
+        byte[] version=felRead(c,out,in,32);
+        byte[] status=felRead(c,out,in,8);
+        if(!"AWUSBFEX".equals(new String(version,0,8,StandardCharsets.US_ASCII)))
+          throw new Exception("Invalid FEL signature");
+        if(status[0]!=(byte)0xff||status[1]!=(byte)0xff)
+          throw new Exception("Unexpected FEL status");
+        if(baseline!=null&&!Arrays.equals(baseline,version))
+          throw new Exception("Inconsistent FEL version data");
+        baseline=version;
+        ByteBuffer b=ByteBuffer.wrap(version).order(ByteOrder.LITTLE_ENDIAN);
+        soc=(b.getInt(8)>>>8)&0xffff;
+        protocol=b.getShort(16)&0xffff;
+        scratch=b.getInt(20)&0xffffffffL;
+        report("PASS: FEL version request "+i+"/3");
+      }
+      report(String.format(Locale.US,"SoC 0x%04X; protocol %d; scratch 0x%08X",soc,protocol,scratch));
+      if(scratch==0||scratch>0x100000||scratch%4!=0)
+        throw new Exception("Scratch RAM address outside conservative bounds");
+      byte[] first=null;
+      for(int i=1;i<=3;i++){
+        ByteBuffer req=ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
+        req.putInt(0x103);req.putInt((int)scratch);req.putInt(16);req.putInt(0);
+        send(c,out,usbHeader(0x12,16));
+        send(c,out,req.array());
+        usbStatus(c,in);
+        byte[] data=felRead(c,out,in,16);
+        byte[] status=felRead(c,out,in,8);
+        if(status[0]!=(byte)0xff||status[1]!=(byte)0xff)
+          throw new Exception("Unexpected RAM read status");
+        if(first!=null&&!Arrays.equals(first,data))
+          throw new Exception("Scratch RAM reads differ");
+        first=data;
+        report("PASS: scratch RAM read "+i+"/3");
+      }
+      report("Scratch RAM bytes: "+hex(first));
+      report("PASS: Read-only FEL transport and RAM checks");
+      report("NOT TESTED: firmware storage, partitions, Hakchi installation, backup, restore");
+      report("NEXT: Tap 10 to export this session's diagnostics to JSON.");
+    }catch(Exception e){report("FAIL: Full diagnostics: "+e.getMessage());}
+    finally{if(claimed)c.releaseInterface(iface);c.close();}
   }
   @Override protected void onDestroy(){unregisterReceiver(receiver);super.onDestroy();}
 }
