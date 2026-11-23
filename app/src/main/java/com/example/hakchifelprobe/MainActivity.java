@@ -46,7 +46,8 @@ public class MainActivity extends Activity {
     ScrollView scroll=new ScrollView(this);
     log=new TextView(this); log.setTextColor(Color.GREEN); log.setTextIsSelectable(true);
     scroll.addView(log); root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
-    button(root,"4. Read FEL version (read-only)",v->readFelVersion());
+    button(root,"4. Read FEL version (read-only)",v->readFelVersion(1));
+    button(root,"5. Reliability test: 5 version reads",v->readFelVersion(5));
     button(root,"Share log",v->{Intent i=new Intent(Intent.ACTION_SEND);i.setType("text/plain");i.putExtra(Intent.EXTRA_TEXT,log.getText().toString());startActivity(Intent.createChooser(i,"Share diagnostic log"));});
     setContentView(root);
     IntentFilter f=new IntentFilter(PERMISSION);
@@ -145,7 +146,7 @@ public class MainActivity extends Activity {
     for(byte x:b)s.append(String.format(Locale.US,"%02X ",x&255));
     return s.toString().trim();
   }
-  void readFelVersion(){
+  void readFelVersion(int repeats){
     if(device==null||!manager.hasPermission(device)){append("FAIL: FEL device or USB permission missing");return;}
     UsbInterface iface=null;UsbEndpoint in=null,out=null;
     for(int i=0;i<device.getInterfaceCount();i++){
@@ -163,16 +164,27 @@ public class MainActivity extends Activity {
     if(c==null){append("FAIL: Unable to open device");return;}
     try{
       if(!c.claimInterface(iface,false)){append("FAIL: Could not claim interface");return;}
-      append("Sending FEL_VERSION request (read-only)...");
-      felWriteRequest(c,out,in);
-      byte[] version=felRead(c,out,in,32);
-      byte[] status=felRead(c,out,in,8);
-      append("Version bytes: "+hex(version));
-      append("FEL status: "+hex(status));
-      String sig=new String(version,0,8,StandardCharsets.US_ASCII);
-      if(!sig.startsWith("AWUSBFEX"))throw new Exception("Unexpected FEL version signature: "+sig);
-      int soc=(ByteBuffer.wrap(version).order(ByteOrder.LITTLE_ENDIAN).getInt(8)>>>8)&0xffff;
-      append(String.format(Locale.US,"PASS: FEL protocol communication! SoC ID: 0x%04X",soc));
+      append("FEL v0.3 read-only test: "+repeats+" request(s)");
+      byte[] baseline=null;
+      for(int test=1;test<=repeats;test++){
+        long start=System.nanoTime();
+        felWriteRequest(c,out,in);
+        byte[] version=felRead(c,out,in,32);
+        byte[] status=felRead(c,out,in,8);
+        String sig=new String(version,0,8,StandardCharsets.US_ASCII);
+        if(!"AWUSBFEX".equals(sig))throw new Exception("Invalid version signature on read "+test+": "+sig);
+        if(status[0]!=(byte)0xff||status[1]!=(byte)0xff)
+          throw new Exception("Unexpected FEL status on read "+test+": "+hex(status));
+        if(baseline!=null&&!Arrays.equals(baseline,version))
+          throw new Exception("Version changed between reads at test "+test);
+        baseline=version;
+        int soc=(ByteBuffer.wrap(version).order(ByteOrder.LITTLE_ENDIAN).getInt(8)>>>8)&0xffff;
+        int protocol=ByteBuffer.wrap(version).order(ByteOrder.LITTLE_ENDIAN).getShort(16)&0xffff;
+        long ms=(System.nanoTime()-start)/1000000;
+        append(String.format(Locale.US,"PASS %d/%d: SoC 0x%04X, protocol %d, %d ms",test,repeats,soc,protocol,ms));
+      }
+      append("Version bytes: "+hex(baseline));
+      append("PASS: "+repeats+"/"+repeats+" consistent FEL version responses; no memory writes.");
     }catch(Exception e){append("FAIL: "+e.getMessage());}
     finally{c.releaseInterface(iface);c.close();}
   }
