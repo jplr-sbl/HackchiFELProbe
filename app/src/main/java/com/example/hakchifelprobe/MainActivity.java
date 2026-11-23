@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.io.OutputStream;
 import java.io.InputStream;
 import java.security.MessageDigest;
+import java.util.zip.CRC32;
 import android.os.StatFs;
 import android.net.Uri;
 
@@ -47,7 +48,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  1.6.1"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  1.7"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -76,7 +77,7 @@ public class MainActivity extends Activity {
       advanced.setVisibility(show?View.VISIBLE:View.GONE);
       advancedToggle.setText(show?"Hide advanced tools  ▴":"Show advanced tools  ▾");
     });
-    button(advanced,"Inspect local loader file (NO EXECUTION)",v->selectLoaderFile());
+    button(advanced,"Analyze U-Boot / loader file (OFFLINE)",v->selectLoaderFile());
     button(advanced,"Scan USB",v->scan());
     permissionButton=button(advanced,"Request USB permission",v->request());
     probeButton=button(advanced,"Open FEL interface",v->probe());
@@ -145,34 +146,79 @@ public class MainActivity extends Activity {
     intent.setType("*/*");
     startActivityForResult(intent,INSPECT_LOADER);
   }
+  static long be32(byte[] b,int p){return ((long)(b[p]&255)<<24)|((long)(b[p+1]&255)<<16)|((long)(b[p+2]&255)<<8)|(b[p+3]&255);}
+  static long le32(byte[] b,int p){return ((long)(b[p]&255))|((long)(b[p+1]&255)<<8)|((long)(b[p+2]&255)<<16)|((long)(b[p+3]&255)<<24);}
+  static String ascii(byte[] b,int start,int len){
+    StringBuilder x=new StringBuilder();
+    for(int i=start;i<start+len;i++){int c=b[i]&255;if(c==0)break;x.append(c>=32&&c<=126?(char)c:'.');}
+    return x.toString();
+  }
   void inspectLoaderFile(Uri uri){
-    report("--- v1.6 offline loader file inspection ---");
-    report("Inspection only: file stays on Android; never sent to the NES Classic.");
+    report("--- v1.7 offline U-Boot / loader analyzer ---");
+    report("Local inspection only; no USB transfers, RAM writes, boot or flash commands.");
     try(InputStream input=getContentResolver().openInputStream(uri)){
       if(input==null)throw new Exception("Cannot open selected file");
       MessageDigest digest=MessageDigest.getInstance("SHA-256");
-      byte[] buf=new byte[8192],head=new byte[64];long size=0;
-      int n;
+      byte[] buf=new byte[8192],head=new byte[512];long size=0;
+      int n;CRC32 payloadCrc=new CRC32();
       while((n=input.read(buf))!=-1){
         if(n==0)continue;
         if(size+n>16L*1024*1024)throw new Exception("File exceeds 16 MiB inspection limit");
-        if(size<64)System.arraycopy(buf,0,head,(int)size,(int)Math.min(n,64-size));
+        if(size<head.length)System.arraycopy(buf,0,head,(int)size,(int)Math.min(n,head.length-size));
+        // Legacy U-Boot uImage payload begins at offset 64.
+        long from=Math.max(size,64),to=size+n;
+        if(to>from)payloadCrc.update(buf,(int)(from-size),(int)(to-from));
         digest.update(buf,0,n);size+=n;
       }
       if(size==0)throw new Exception("Empty file");
       StringBuilder hash=new StringBuilder();
-      for(byte b:digest.digest())hash.append(String.format(Locale.US,"%02x",b&255));
-      report("File size: "+size+" bytes");
+      for(byte v:digest.digest())hash.append(String.format(Locale.US,"%02x",v&255));
+      report("File size: "+size+" bytes ("+String.format(Locale.US,"%.1f",size/1024.0)+" KiB)");
       report("SHA-256: "+hash);
-      boolean elf=size>=20&&(head[0]&255)==0x7f&&head[1]=='E'&&head[2]=='L'&&head[3]=='F';
-      if(elf){
-        int machine=(head[18]&255)|((head[19]&255)<<8);
-        report("ELF header detected; machine ID "+machine+(machine==40?" (ARM)":" (not ARM32)"));
-        report("ELF architecture is not proof of compatibility or safety.");
-      }else report("Not identified as ELF; could be raw binary or unrelated file.");
-      report("Compatibility: UNVERIFIED; no trusted hash allowlist or code review");
-      report("Execution: DISABLED; storage access: NOT IMPLEMENTED");
-    }catch(Exception e){report("Loader inspection failed: "+e.getMessage());}
+      boolean recognized=false;
+      if(size>=64&&be32(head,0)==0x27051956L){
+        recognized=true;
+        report("Format: legacy U-Boot uImage header (magic verified)");
+        long expectedHeaderCrc=be32(head,4),expectedPayloadCrc=be32(head,24);
+        byte[] header=Arrays.copyOf(head,64);
+        Arrays.fill(header,4,8,(byte)0);
+        CRC32 headerCrc=new CRC32();headerCrc.update(header);
+        report("Header CRC32: "+(headerCrc.getValue()==expectedHeaderCrc?"PASS":"FAIL"));
+        long payloadLength=be32(head,12);
+        report("Declared payload: "+payloadLength+" bytes; actual: "+(size-64)+" bytes");
+        report("Payload length: "+(payloadLength==size-64?"PASS":"MISMATCH"));
+        report("Payload CRC32: "+(payloadLength==size-64&&payloadCrc.getValue()==expectedPayloadCrc?"PASS":"FAIL / NOT VERIFIED"));
+        report(String.format(Locale.US,"Load address: 0x%08X; entry point: 0x%08X",be32(head,16),be32(head,20)));
+        report("Architecture code: "+(head[29]&255)+" (2 means ARM in legacy uImage)");
+        report("Image type: "+(head[30]&255)+"; compression code: "+(head[31]&255));
+        report("Image name: "+ascii(head,32,32));
+      }
+      if(!recognized&&size>=32&&ascii(head,4,8).equals("eGON.BT0")){
+        recognized=true;
+        report("Format: Allwinner eGON boot0-style header (signature at offset 4)");
+        report(String.format(Locale.US,"Header checksum field: 0x%08X; declared length: %d",le32(head,12),le32(head,16)));
+        report("Checksum not validated; eGON header alone does not establish compatibility.");
+      }
+      if(!recognized&&size>=20&&(head[0]&255)==127&&head[1]=='E'&&head[2]=='L'&&head[3]=='F'){
+        recognized=true;
+        boolean little=(head[5]&255)==1;
+        int machine=little?((head[18]&255)|((head[19]&255)<<8)):((head[18]&255)<<8|(head[19]&255));
+        report("Format: ELF; class "+(head[4]&255)+"; byte order "+(little?"little endian":"other"));
+        report("ELF machine ID: "+machine+(machine==40?" (ARM)":" (not ARM32)"));
+        report("ELF header alone does not establish NES Classic compatibility.");
+      }
+      if(!recognized&&size>=8&&ascii(head,0,8).equals("TOC0.GLH")){
+        recognized=true;report("Format: Allwinner TOC0-style header signature");
+        report("TOC0 structure and cryptographic validation: NOT IMPLEMENTED");
+      }
+      if(!recognized){
+        report("Format: unknown raw binary or unsupported image format");
+        report("No recognized ELF, legacy uImage, eGON.BT0 or TOC0 signature at expected offsets.");
+        report("Raw U-Boot binaries can lack recognizable headers; this is not a file integrity failure.");
+      }
+      report("NES Classic compatibility: NOT VERIFIED (format checks are not a hardware allowlist)");
+      report("Loader execution: DISABLED; internal storage access: NOT IMPLEMENTED");
+    }catch(Exception e){report("File analysis failed: "+e.getMessage());}
   }
   void showBackupRequirements(){
     new AlertDialog.Builder(this).setTitle("Firmware backup: not yet supported")
