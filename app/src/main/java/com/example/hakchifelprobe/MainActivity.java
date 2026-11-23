@@ -51,6 +51,7 @@ public class MainActivity extends Activity {
     button(root,"6. Read 16 bytes of FEL scratch RAM",v->new Thread(()->readScratchRam(1)).start());
     button(root,"7. RAM reliability test: 5 reads",v->new Thread(()->readScratchRam(5)).start());
     button(root,"8. Console identification report",v->new Thread(()->identifyConsole()).start());
+    button(root,"9. Backup readiness assessment",v->new Thread(()->backupReadiness()).start());
     button(root,"Share log",v->{Intent i=new Intent(Intent.ACTION_SEND);i.setType("text/plain");i.putExtra(Intent.EXTRA_TEXT,log.getText().toString());startActivity(Intent.createChooser(i,"Share diagnostic log"));});
     setContentView(root);
     IntentFilter f=new IntentFilter(PERMISSION);
@@ -301,6 +302,53 @@ public class MainActivity extends Activity {
       report("No firmware, storage or kernel modifications performed.");
       report("PASS: Console FEL identification report complete");
     }catch(Exception e){report("FAIL: Identification: "+e.getMessage());}
+    finally{if(claimed)c.releaseInterface(iface);c.close();}
+  }
+
+  void backupReadiness(){
+    UsbDevice d=device;
+    report("=== FEL Probe v0.7: backup readiness ===");
+    if(d==null){report("BLOCKED: FEL USB device not detected");return;}
+    if(!manager.hasPermission(d)){report("BLOCKED: USB permission required");return;}
+    report(String.format(Locale.US,"USB device: %04X:%04X",d.getVendorId(),d.getProductId()));
+    UsbInterface iface=null;UsbEndpoint in=null,out=null;
+    for(int i=0;i<d.getInterfaceCount();i++){
+      UsbInterface it=d.getInterface(i);UsbEndpoint a=null,b=null;
+      for(int k=0;k<it.getEndpointCount();k++){
+        UsbEndpoint ep=it.getEndpoint(k);
+        if(ep.getType()!=UsbConstants.USB_ENDPOINT_XFER_BULK)continue;
+        if(ep.getDirection()==UsbConstants.USB_DIR_IN)a=ep;else b=ep;
+      }
+      if(a!=null&&b!=null){iface=it;in=a;out=b;break;}
+    }
+    if(iface==null){report("BLOCKED: Missing bulk endpoints");return;}
+    UsbDeviceConnection c=manager.openDevice(d);
+    if(c==null){report("BLOCKED: Cannot open FEL USB device");return;}
+    boolean claimed=false;
+    try{
+      claimed=c.claimInterface(iface,false);
+      if(!claimed)throw new Exception("Cannot claim interface");
+      felWriteRequest(c,out,in);
+      byte[] version=felRead(c,out,in,32);
+      byte[] status=felRead(c,out,in,8);
+      if(!"AWUSBFEX".equals(new String(version,0,8,StandardCharsets.US_ASCII)))
+        throw new Exception("FEL signature mismatch");
+      if(status[0]!=(byte)0xff||status[1]!=(byte)0xff)
+        throw new Exception("FEL status mismatch");
+      ByteBuffer b=ByteBuffer.wrap(version).order(ByteOrder.LITTLE_ENDIAN);
+      int soc=(b.getInt(8)>>>8)&0xffff;
+      int protocol=b.getShort(16)&0xffff;
+      report(String.format(Locale.US,"PASS: FEL responding, SoC 0x%04X, protocol %d",soc,protocol));
+      report("USB transport: AVAILABLE");
+      report("FEL boot ROM: AVAILABLE");
+      report("Internal flash / NAND or eMMC access: NOT IMPLEMENTED");
+      report("Partition map discovery: NOT IMPLEMENTED");
+      report("Existing Hakchi installation detection: NOT IMPLEMENTED");
+      report("Backup file export and integrity validation: NOT IMPLEMENTED");
+      report("Restore / recovery procedure: NOT VERIFIED");
+      report("ASSESSMENT: NOT READY for firmware backup or flashing");
+      report("No firmware or memory writes performed.");
+    }catch(Exception e){report("BLOCKED: "+e.getMessage());}
     finally{if(claimed)c.releaseInterface(iface);c.close();}
   }
   @Override protected void onDestroy(){unregisterReceiver(receiver);super.onDestroy();}
