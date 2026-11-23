@@ -11,6 +11,8 @@ import java.util.*;
 import java.nio.*;
 import java.nio.charset.StandardCharsets;
 import java.io.OutputStream;
+import java.security.MessageDigest;
+import android.os.StatFs;
 import android.net.Uri;
 
 public class MainActivity extends Activity {
@@ -35,7 +37,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  1.0"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  1.2"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -46,7 +48,7 @@ public class MainActivity extends Activity {
 
     LinearLayout actions=new LinearLayout(this);
     actions.setOrientation(LinearLayout.VERTICAL);
-    button(actions,"Run ALL tests (one tap)",v->new Thread(()->runAllTests()).start());
+    button(actions,"Complete compatibility check",v->new Thread(()->runAllTests()).start());
     button(actions,"Export JSON report",v->exportDiagnosticJson());
     root.addView(actions);
 
@@ -413,7 +415,7 @@ public class MainActivity extends Activity {
     UsbDevice d=device;
     String deviceId=d==null?"not connected":String.format(Locale.US,"%04X:%04X",d.getVendorId(),d.getProductId());
     String payload="{\n"+
-      "  \"report_format\": \"hakchi-fel-probe-v1.1\",\n"+
+      "  \"report_format\": \"hakchi-fel-probe-v1.2\",\n"+
       "  \"device_id\": \""+deviceId+"\",\n"+
       "  \"usb_permission\": "+(d!=null&&manager.hasPermission(d))+",\n"+
       "  \"firmware_backup_created\": false,\n"+
@@ -429,19 +431,51 @@ public class MainActivity extends Activity {
   }
 
   void runAllTests(){
-    report("=== FEL Probe v1.1: ONE-TAP TEST SUITE ===");
-    report("Running USB, FEL version, RAM reliability, identification and backup readiness...");
-    fullDiagnostics();
+    report("=== FEL Probe v1.2: COMPLETE FEASIBLE CHECKS ===");
+    report("Hardware and software checks only; no storage commands or flashing.");
+    softwarePreflight();
     if(device==null||!manager.hasPermission(device)){
-      report("STOP: USB permission missing; grant permission and retry.");
-      return;
+      report("BLOCKED: FEL hardware tests require USB permission.");
+    }else{
+      fullDiagnostics();
+      readScratchRam(5);
+      identifyConsole();
+      backupReadiness();
     }
-    readScratchRam(5);
-    identifyConsole();
-    backupReadiness();
-    report("=== ONE-TAP SUITE FINISHED ===");
-    report("Review PASS/FAIL entries above. Storage backup and restore are not implemented.");
-    report("Export JSON report to share all results.");
+    report("=== REMAINING CAPABILITIES ===");
+    report("NOT IMPLEMENTED: NAND/eMMC controller driver, storage discovery, partition map.");
+    report("NOT IMPLEMENTED: Hakchi installation identification, firmware extraction, backup verification.");
+    report("NOT VERIFIED: restore/recovery or game installation.");
+    report("COMPLETE: All currently feasible non-destructive checks attempted.");
+    report("Export JSON report to save these results.");
+  }
+  void softwarePreflight(){
+    report("--- Software / backup preparation checks ---");
+    try{
+      byte[] header=usbHeader(0x12,16);
+      ByteBuffer b=ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN);
+      if(header.length!=32||header[0]!='A'||header[1]!='W'||header[2]!='U'||header[3]!='C'
+          ||b.getInt(8)!=16||b.getShort(16)!=0x12||b.getInt(18)!=16)
+        throw new Exception("AWUC packet header mismatch");
+      report("PASS: FEL USB packet encoding self-test");
+    }catch(Exception e){report("FAIL: Packet self-test: "+e.getMessage());}
+    try{
+      String sample="test \"quote\" \\ slash\\nline";
+      String escaped=jsonEscape(sample);
+      if(!escaped.contains("\\\"quote\\\"")||!escaped.contains("\\\\"))
+        throw new Exception("JSON escaping mismatch");
+      MessageDigest md=MessageDigest.getInstance("SHA-256");
+      byte[] digest=md.digest(sample.getBytes(StandardCharsets.UTF_8));
+      if(digest.length!=32)throw new Exception("SHA-256 digest length mismatch");
+      report("PASS: JSON escaping and SHA-256 availability self-test");
+    }catch(Exception e){report("FAIL: Report integrity preflight: "+e.getMessage());}
+    try{
+      StatFs fs=new StatFs(getFilesDir().getAbsolutePath());
+      long available=fs.getAvailableBytes();
+      report(String.format(Locale.US,"INFO: App storage available %.1f MiB (not a backup capacity guarantee)",available/1048576.0));
+    }catch(Exception e){report("INFO: Storage capacity unavailable: "+e.getMessage());}
+    report("PASS: Android device "+Build.MANUFACTURER+" "+Build.MODEL+", API "+Build.VERSION.SDK_INT);
+    report("NOT VERIFIED: Backup file readback, checksum or restore (no firmware backup exists).");
   }
   void fullDiagnostics(){
     UsbDevice d=device;
