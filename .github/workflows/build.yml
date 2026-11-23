@@ -37,6 +37,29 @@ jobs:
               assert len(data) == size and actual == expected_sha, f"{name}: upstream identity mismatch"
               print(f"PASS {name}: {len(data)} bytes; Git blob SHA-1 {actual}")
           PY
+      - name: Automated source regression checks
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path("app/src/main/java/com/example/hakchifelprobe/MainActivity.java").read_text()
+          required = {
+              "USB device detection": "VID=0x1F3A, PID=0xEFE8",
+              "FES1 loader": "runLoaderV45()",
+              "U-Boot full readback": "runUbootStageV47()",
+              "One-button workflow": "runOneTapV49()",
+              "Flash read path": "runFlashReadV50()",
+              "Flash export checksum": "writeFlashSectorExportV51(Uri target)",
+              "NES ROM import": "importNesRomV52(Uri uri)",
+              "NES library persistence": 'new java.io.File(getFilesDir(),"nes-library")',
+          }
+          for label, marker in required.items():
+              assert marker in source, f"Missing: {label}"
+              print(f"PASS source presence: {label}")
+          assert "sunxi_flash phy_write" not in source, "Unsafe flash-write command detected"
+          assert "NOT installed on NES Classic." in source
+          print("PASS: no flash-write command enabled")
+          print("NOTE: source checks cannot validate hardware behavior")
+          PY
       - name: Build debug APK
         run: gradle :app:assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
