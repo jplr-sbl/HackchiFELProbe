@@ -10,6 +10,8 @@ import android.widget.*;
 import java.util.*;
 import java.nio.*;
 import java.nio.charset.StandardCharsets;
+import java.io.OutputStream;
+import android.net.Uri;
 
 public class MainActivity extends Activity {
   static final int VID=0x1F3A, PID=0xEFE8;
@@ -52,6 +54,7 @@ public class MainActivity extends Activity {
     button(root,"7. RAM reliability test: 5 reads",v->new Thread(()->readScratchRam(5)).start());
     button(root,"8. Console identification report",v->new Thread(()->identifyConsole()).start());
     button(root,"9. Backup readiness assessment",v->new Thread(()->backupReadiness()).start());
+    button(root,"10. Export diagnostic report (JSON)",v->exportDiagnosticJson());
     button(root,"Share log",v->{Intent i=new Intent(Intent.ACTION_SEND);i.setType("text/plain");i.putExtra(Intent.EXTRA_TEXT,log.getText().toString());startActivity(Intent.createChooser(i,"Share diagnostic log"));});
     setContentView(root);
     IntentFilter f=new IntentFilter(PERMISSION);
@@ -350,6 +353,39 @@ public class MainActivity extends Activity {
       report("No firmware or memory writes performed.");
     }catch(Exception e){report("BLOCKED: "+e.getMessage());}
     finally{if(claimed)c.releaseInterface(iface);c.close();}
+  }
+
+  static final int EXPORT_DIAGNOSTICS=7008;
+  void exportDiagnosticJson(){
+    Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);
+    i.addCategory(Intent.CATEGORY_OPENABLE);
+    i.setType("application/json");
+    i.putExtra(Intent.EXTRA_TITLE,"nes-fel-diagnostics.json");
+    startActivityForResult(i,EXPORT_DIAGNOSTICS);
+  }
+  String jsonEscape(String s){
+    return s.replace("\\","\\\\").replace("\"","\\\"").replace("\n","\\n").replace("\r","\\r");
+  }
+  @Override protected void onActivityResult(int request,int result,Intent data){
+    super.onActivityResult(request,result,data);
+    if(request!=EXPORT_DIAGNOSTICS||result!=RESULT_OK||data==null||data.getData()==null)return;
+    Uri uri=data.getData();
+    UsbDevice d=device;
+    String deviceId=d==null?"not connected":String.format(Locale.US,"%04X:%04X",d.getVendorId(),d.getProductId());
+    String payload="{\n"+
+      "  \"report_format\": \"hakchi-fel-probe-v0.8\",\n"+
+      "  \"device_id\": \""+deviceId+"\",\n"+
+      "  \"usb_permission\": "+(d!=null&&manager.hasPermission(d))+",\n"+
+      "  \"firmware_backup_created\": false,\n"+
+      "  \"firmware_storage_access_implemented\": false,\n"+
+      "  \"note\": \"Diagnostic log only; not a firmware backup\",\n"+
+      "  \"diagnostic_log\": \""+jsonEscape(log.getText().toString())+"\"\n"+
+      "}\n";
+    try(OutputStream stream=getContentResolver().openOutputStream(uri)){
+      if(stream==null)throw new Exception("Could not open destination");
+      stream.write(payload.getBytes(StandardCharsets.UTF_8));
+      append("PASS: Diagnostic JSON exported (not a firmware backup)");
+    }catch(Exception e){append("FAIL: JSON export: "+e.getMessage());}
   }
   @Override protected void onDestroy(){unregisterReceiver(receiver);super.onDestroy();}
 }
