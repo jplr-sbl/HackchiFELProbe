@@ -8,6 +8,8 @@ import android.graphics.Color;
 import android.view.*;
 import android.widget.*;
 import java.util.*;
+import java.nio.*;
+import java.nio.charset.StandardCharsets;
 
 public class MainActivity extends Activity {
   static final int VID=0x1F3A, PID=0xEFE8;
@@ -44,6 +46,7 @@ public class MainActivity extends Activity {
     ScrollView scroll=new ScrollView(this);
     log=new TextView(this); log.setTextColor(Color.GREEN); log.setTextIsSelectable(true);
     scroll.addView(log); root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+    button(root,"4. Read FEL version (read-only)",v->readFelVersion());
     button(root,"Share log",v->{Intent i=new Intent(Intent.ACTION_SEND);i.setType("text/plain");i.putExtra(Intent.EXTRA_TEXT,log.getText().toString());startActivity(Intent.createChooser(i,"Share diagnostic log"));});
     setContentView(root);
     IntentFilter f=new IntentFilter(PERMISSION);
@@ -94,6 +97,84 @@ public class MainActivity extends Activity {
       append(claimed?"PASS: bulk interface claimed successfully":"FAIL: claimInterface returned false");
       if(claimed)connection.releaseInterface(iface);
     } finally {connection.close();}
+  }
+
+  static byte[] usbHeader(int type,int length){
+    ByteBuffer b=ByteBuffer.allocate(32).order(ByteOrder.LITTLE_ENDIAN);
+    b.put(new byte[]{'A','W','U','C',0,0,0,0});
+    b.putInt(length); b.putInt(0x0c000000); b.putShort((short)type); b.putInt(length);
+    return b.array();
+  }
+  void send(UsbDeviceConnection c,UsbEndpoint ep,byte[] bytes)throws Exception{
+    int offset=0;
+    while(offset<bytes.length){
+      int n=c.bulkTransfer(ep,bytes,offset,bytes.length-offset,4000);
+      if(n<=0)throw new Exception("USB OUT failed at "+offset+" (result "+n+")");
+      offset+=n;
+    }
+  }
+  byte[] recv(UsbDeviceConnection c,UsbEndpoint ep,int len)throws Exception{
+    byte[] data=new byte[len];int offset=0;
+    while(offset<len){
+      int n=c.bulkTransfer(ep,data,offset,len-offset,4000);
+      if(n<=0)throw new Exception("USB IN failed at "+offset+" (result "+n+")");
+      offset+=n;
+    }
+    return data;
+  }
+  void usbStatus(UsbDeviceConnection c,UsbEndpoint in)throws Exception{
+    byte[] status=recv(c,in,13);
+    if(status[0]!='A'||status[1]!='W'||status[2]!='U'||status[3]!='S')
+      throw new Exception("Invalid USB status header: "+hex(status));
+  }
+  void felWriteRequest(UsbDeviceConnection c,UsbEndpoint out,UsbEndpoint in)throws Exception{
+    ByteBuffer request=ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
+    request.putInt(1); // AW_FEL_VERSION; no memory access or execution
+    send(c,out,usbHeader(0x12,16));
+    send(c,out,request.array());
+    usbStatus(c,in);
+  }
+  byte[] felRead(UsbDeviceConnection c,UsbEndpoint out,UsbEndpoint in,int size)throws Exception{
+    send(c,out,usbHeader(0x11,size));
+    byte[] data=recv(c,in,size);
+    usbStatus(c,in);
+    return data;
+  }
+  String hex(byte[] b){
+    StringBuilder s=new StringBuilder();
+    for(byte x:b)s.append(String.format(Locale.US,"%02X ",x&255));
+    return s.toString().trim();
+  }
+  void readFelVersion(){
+    if(device==null||!manager.hasPermission(device)){append("FAIL: FEL device or USB permission missing");return;}
+    UsbInterface iface=null;UsbEndpoint in=null,out=null;
+    for(int i=0;i<device.getInterfaceCount();i++){
+      UsbInterface it=device.getInterface(i);UsbEndpoint a=null,b=null;
+      for(int k=0;k<it.getEndpointCount();k++){
+        UsbEndpoint ep=it.getEndpoint(k);
+        if(ep.getType()!=UsbConstants.USB_ENDPOINT_XFER_BULK)continue;
+        if(ep.getDirection()==UsbConstants.USB_DIR_IN)a=ep;
+        else b=ep;
+      }
+      if(a!=null&&b!=null){iface=it;in=a;out=b;break;}
+    }
+    if(iface==null){append("FAIL: No FEL bulk endpoints");return;}
+    UsbDeviceConnection c=manager.openDevice(device);
+    if(c==null){append("FAIL: Unable to open device");return;}
+    try{
+      if(!c.claimInterface(iface,false)){append("FAIL: Could not claim interface");return;}
+      append("Sending FEL_VERSION request (read-only)...");
+      felWriteRequest(c,out,in);
+      byte[] version=felRead(c,out,in,32);
+      byte[] status=felRead(c,out,in,8);
+      append("Version bytes: "+hex(version));
+      append("FEL status: "+hex(status));
+      String sig=new String(version,0,8,StandardCharsets.US_ASCII);
+      if(!sig.startsWith("AWUSBFEX"))throw new Exception("Unexpected FEL version signature: "+sig);
+      int soc=(ByteBuffer.wrap(version).order(ByteOrder.LITTLE_ENDIAN).getInt(8)>>>8)&0xffff;
+      append(String.format(Locale.US,"PASS: FEL protocol communication! SoC ID: 0x%04X",soc));
+    }catch(Exception e){append("FAIL: "+e.getMessage());}
+    finally{c.releaseInterface(iface);c.close();}
   }
   @Override protected void onDestroy(){unregisterReceiver(receiver);super.onDestroy();}
 }
