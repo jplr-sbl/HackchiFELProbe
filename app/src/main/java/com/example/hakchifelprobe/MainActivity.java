@@ -50,6 +50,7 @@ public class MainActivity extends Activity {
     button(root,"5. Reliability test: 5 version reads",v->readFelVersion(5));
     button(root,"6. Read 16 bytes of FEL scratch RAM",v->new Thread(()->readScratchRam(1)).start());
     button(root,"7. RAM reliability test: 5 reads",v->new Thread(()->readScratchRam(5)).start());
+    button(root,"8. Console identification report",v->new Thread(()->identifyConsole()).start());
     button(root,"Share log",v->{Intent i=new Intent(Intent.ACTION_SEND);i.setType("text/plain");i.putExtra(Intent.EXTRA_TEXT,log.getText().toString());startActivity(Intent.createChooser(i,"Share diagnostic log"));});
     setContentView(root);
     IntentFilter f=new IntentFilter(PERMISSION);
@@ -250,6 +251,56 @@ public class MainActivity extends Activity {
       report("RAM bytes: "+hex(baseline));
       report(String.format(Locale.US,"PASS: %d/%d matching RAM reads; average %.2f ms; no memory writes.",repeats,repeats,totalNs/1000000.0/repeats));
     }catch(Exception e){report("FAIL: FEL RAM read: "+e.getMessage());}
+    finally{if(claimed)c.releaseInterface(iface);c.close();}
+  }
+
+  void identifyConsole(){
+    UsbDevice d=device;
+    if(d==null||!manager.hasPermission(d)){report("FAIL: FEL device or permission missing");return;}
+    report("=== FEL Probe v0.6 identification report ===");
+    report(String.format(Locale.US,"USB VID:PID %04X:%04X",d.getVendorId(),d.getProductId()));
+    report("USB interfaces: "+d.getInterfaceCount());
+    UsbInterface iface=null;UsbEndpoint in=null,out=null;
+    for(int i=0;i<d.getInterfaceCount();i++){
+      UsbInterface it=d.getInterface(i);
+      report(String.format(Locale.US,"Interface %d: class 0x%02X, endpoints %d",i,it.getInterfaceClass(),it.getEndpointCount()));
+      UsbEndpoint a=null,b=null;
+      for(int k=0;k<it.getEndpointCount();k++){
+        UsbEndpoint ep=it.getEndpoint(k);
+        report(String.format(Locale.US," Endpoint 0x%02X, type %d, max packet %d",ep.getAddress(),ep.getType(),ep.getMaxPacketSize()));
+        if(ep.getType()==UsbConstants.USB_ENDPOINT_XFER_BULK){
+          if(ep.getDirection()==UsbConstants.USB_DIR_IN)a=ep;else b=ep;
+        }
+      }
+      if(iface==null&&a!=null&&b!=null){iface=it;in=a;out=b;}
+    }
+    if(iface==null){report("FAIL: No FEL bulk interface");return;}
+    UsbDeviceConnection c=manager.openDevice(d);
+    if(c==null){report("FAIL: USB open failed");return;}
+    boolean claimed=false;
+    try{
+      claimed=c.claimInterface(iface,false);
+      if(!claimed)throw new Exception("Cannot claim interface");
+      felWriteRequest(c,out,in);
+      byte[] version=felRead(c,out,in,32);
+      byte[] felStatus=felRead(c,out,in,8);
+      if(!"AWUSBFEX".equals(new String(version,0,8,StandardCharsets.US_ASCII)))
+        throw new Exception("Unexpected FEL signature");
+      if(felStatus[0]!=(byte)0xff||felStatus[1]!=(byte)0xff)
+        throw new Exception("Unexpected FEL status: "+hex(felStatus));
+      ByteBuffer b=ByteBuffer.wrap(version).order(ByteOrder.LITTLE_ENDIAN);
+      int soc=(b.getInt(8)>>>8)&0xffff;
+      int protocol=b.getShort(16)&0xffff;
+      long scratch=b.getInt(20)&0xffffffffL;
+      report("FEL signature: AWUSBFEX");
+      report(String.format(Locale.US,"SoC ID: 0x%04X",soc));
+      report("FEL protocol: "+protocol);
+      report(String.format(Locale.US,"FEL scratch address: 0x%08X",scratch));
+      report("SoC family: "+(soc==0x1667?"Allwinner R16/A33 family (expected NES Classic hardware)":"Not recognized by this app"));
+      report("Firmware / existing Hakchi installation: UNKNOWN (not available from FEL version)");
+      report("No firmware, storage or kernel modifications performed.");
+      report("PASS: Console FEL identification report complete");
+    }catch(Exception e){report("FAIL: Identification: "+e.getMessage());}
     finally{if(claimed)c.releaseInterface(iface);c.close();}
   }
   @Override protected void onDestroy(){unregisterReceiver(receiver);super.onDestroy();}
