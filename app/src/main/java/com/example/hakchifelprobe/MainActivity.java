@@ -198,8 +198,10 @@ public class MainActivity extends Activity {
         if(!Arrays.equals(md.digest(original),md.digest(read)))throw new Exception("SHA-256 mismatch");
       }finally{temp.delete();}
       passed++;report("PASS 3/4: Android file write/readback and SHA-256");
-      String escaped=jsonEscape("quote \\" and slash \\\\");
-      if(!escaped.contains("\\\"")||!escaped.contains("\\\\\\\\"))throw new Exception("JSON escape mismatch");
+      String sample="quote"+(char)34+" slash"+(char)92;
+      String escaped=jsonEscape(sample);
+      if(!escaped.contains(String.valueOf((char)92)+(char)34)||!escaped.contains(String.valueOf((char)92)+(char)92))
+        throw new Exception("JSON escape mismatch");
       passed++;report("PASS 4/4: Diagnostic JSON escaping");
       report("PASS: "+passed+"/4 offline checks. These do not verify console flash or game installation.");
       return true;
