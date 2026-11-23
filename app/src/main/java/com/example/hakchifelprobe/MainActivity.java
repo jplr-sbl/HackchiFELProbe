@@ -49,7 +49,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  v3.1"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  v3.2 ALL-IN-ONE"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -60,12 +60,12 @@ public class MainActivity extends Activity {
 
     LinearLayout actions=new LinearLayout(this);
     actions.setOrientation(LinearLayout.VERTICAL);
-    auditButton=button(actions,"Run complete READ-ONLY audit",v->beginAudit());
-    button(actions,"Run ALL checks (USB + saved loader)",v->runAllInOne());
-    button(actions,"Choose / replace U-Boot file",v->selectLoaderFile());
-    button(actions,"Choose FES1 DRAM initializer",v->selectFes1File());
-    button(actions,"Run v3.0 offline protocol self-tests",v->new Thread(()->protocolSelfTestsV30()).start());
-    button(actions,"v3.1 Verify BOTH Hakchi binaries",v->new Thread(()->verifyBothUpstreamV31()).start());
+    auditButton=button(actions,"Run ALL built-in checks",v->runBundledAllV32());
+
+
+
+
+
     button(actions,"Export JSON report",v->exportDiagnosticJson());
     root.addView(actions);
 
@@ -168,6 +168,35 @@ public class MainActivity extends Activity {
     else selectLoaderFile();
   }
 
+  void runBundledAllV32(){
+    append("=== v3.2 bundled Hakchi binaries + offline protocol + USB audit ===");
+    new Thread(()->{
+      verifyBundledV32("FES1","fes1.bin",12624,"a64371dc69714e78132af03bac874278b91bb87e");
+      verifyBundledV32("U-Boot","uboot.bin",573440,"0c743b303f129853edef7bb5c1c40d64a355ab03");
+      protocolSelfTestsV30();
+      report("=== Built-in binary and protocol checks complete; USB audit follows ===");
+      runOnUiThread(()->beginAudit());
+    }).start();
+  }
+  void verifyBundledV32(String label,String name,int expectedSize,String expectedSha){
+    report("--- Bundled "+label+" identity check ---");
+    try(InputStream input=getAssets().open(name)){
+      ByteArrayOutputStream out=new ByteArrayOutputStream();
+      byte[] buf=new byte[8192];int n;
+      while((n=input.read(buf))!=-1){
+        if(n==0)continue;
+        if(out.size()+n>1024*1024)throw new Exception("Binary too large");
+        out.write(buf,0,n);
+      }
+      byte[] data=out.toByteArray();
+      MessageDigest sha=MessageDigest.getInstance("SHA-1");
+      sha.update(("blob "+data.length+"\\0").getBytes(StandardCharsets.US_ASCII));
+      sha.update(data);
+      String gitSha=hexDigest(sha.digest());
+      report((data.length==expectedSize&&gitSha.equals(expectedSha)?"PASS":"FAIL")+": "+label+
+        " bundled "+data.length+" bytes; Git blob "+gitSha);
+    }catch(Exception e){report("FAIL: bundled "+label+" verification: "+e.getMessage());}
+  }
   static final String FES1_UPSTREAM_GIT_SHA1="a64371dc69714e78132af03bac874278b91bb87e";
   static final String UBOOT_UPSTREAM_GIT_SHA1="0c743b303f129853edef7bb5c1c40d64a355ab03";
   static String hexDigest(byte[] data){
