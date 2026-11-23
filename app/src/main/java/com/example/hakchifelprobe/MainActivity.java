@@ -190,7 +190,7 @@ public class MainActivity extends Activity {
       }
       byte[] data=out.toByteArray();
       MessageDigest sha=MessageDigest.getInstance("SHA-1");
-      sha.update(("blob "+data.length+"\\0").getBytes(StandardCharsets.US_ASCII));
+      sha.update(("blob "+data.length+((char)0)).getBytes(StandardCharsets.US_ASCII));
       sha.update(data);
       String gitSha=hexDigest(sha.digest());
       report((data.length==expectedSize&&gitSha.equals(expectedSha)?"PASS":"FAIL")+": "+label+
@@ -220,7 +220,7 @@ public class MainActivity extends Activity {
       }
       byte[] data=bytes.toByteArray();
       MessageDigest sha1=MessageDigest.getInstance("SHA-1");
-      byte[] gitHeader=("blob "+data.length+"\\0").getBytes(StandardCharsets.US_ASCII);
+      byte[] gitHeader=("blob "+data.length+((char)0)).getBytes(StandardCharsets.US_ASCII);
       sha1.update(gitHeader);sha1.update(data);
       String gitSha=hexDigest(sha1.digest());
       String sha256=hexDigest(MessageDigest.getInstance("SHA-256").digest(data));
