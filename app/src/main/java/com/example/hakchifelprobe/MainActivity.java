@@ -51,7 +51,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  v4.9 ONE BUTTON"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  v5.0 FLASH READ EXPERIMENT"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -100,7 +100,8 @@ public class MainActivity extends Activity {
     button(actions,"Stage 2: FES1 SRAM loader (experimental)",v->confirmLoaderV45());
     button(actions,"Stage 3: Verify DRAM (read-only)",v->new Thread(()->runStage3V46()).start());
     button(actions,"Stage 4: Upload + verify U-Boot in DRAM",v->confirmUbootStageV47());
-    button(actions,"Stage 5: Storage / backup / Hakchi gate",v->new Thread(()->runStage5V46()).start());
+    button(actions,"Stage 5: EXPERIMENTAL read first flash sector",v->confirmFlashReadV50());
+    button(actions,"Storage / backup / Hakchi status",v->new Thread(()->runStage5V46()).start());
     button(advanced,"Backup readiness assessment",v->new Thread(()->backupReadiness()).start());
     button(advanced,"Firmware backup requirements",v->showBackupRequirements());
     root.addView(advanced);
@@ -156,6 +157,95 @@ public class MainActivity extends Activity {
       report("PASS: ONE-BUTTON COMMUNICATION SEQUENCE COMPLETE");
       report("NEXT DEVELOPMENT REQUIRED: U-Boot execution/reconnect and read-only flash access. Internal storage editing is NOT available in this build.");
     }finally{oneTapRunningV49=false;}
+  }
+  // Experimental first-sector flash read, never writes persistent storage.
+  void confirmFlashReadV50(){
+    if(!ubootStagedV47){report("STOP: U-Boot must be staged and verified in this session first");return;}
+    new AlertDialog.Builder(this).setTitle("Read NES Classic internal flash?")
+      .setMessage("Experimental: execute U-Boot from RAM, run a READ-ONLY flash command for the first 128 KiB sector, reconnect USB and verify a RAM readback. No flash write command is issued. USB may disconnect, the console may stop responding, and recovery may require a power cycle. This is NOT a complete firmware backup or game manager. Continue?")
+      .setNegativeButton("Cancel",null)
+      .setPositiveButton("Read first flash sector",(d,w)->new Thread(()->runFlashReadV50()).start()).show();
+  }
+  void runFlashReadV50(){
+    report("=== EXPERIMENTAL LIVE READ-ONLY FLASH SECTOR 0 ===");
+    UsbDevice d=device;
+    if(d==null||!manager.hasPermission(d)){report("STOP: FEL USB permission required");return;}
+    UsbInterface iface=null;UsbEndpoint in=null,out=null;
+    for(int i=0;i<d.getInterfaceCount();i++){
+      UsbInterface it=d.getInterface(i);UsbEndpoint a=null,b=null;
+      for(int j=0;j<it.getEndpointCount();j++){
+        UsbEndpoint ep=it.getEndpoint(j);
+        if(ep.getType()!=UsbConstants.USB_ENDPOINT_XFER_BULK)continue;
+        if(ep.getAddress()==0x82)a=ep;
+        if(ep.getAddress()==0x01)b=ep;
+      }
+      if(a!=null&&b!=null){iface=it;in=a;out=b;break;}
+    }
+    if(iface==null){report("STOP: Expected FEL endpoints absent");return;}
+    UsbDeviceConnection c=manager.openDevice(d);
+    if(c==null){report("STOP: USB open failed");return;}
+    boolean claimed=false;
+    try{
+      claimed=c.claimInterface(iface,false);
+      if(!claimed)throw new Exception("USB claim failed");
+      byte[] first=loaderReadV45(c,out,in,0x47000000L,32);
+      byte[] expected=new byte[32];
+      try(InputStream input=getAssets().open("uboot.bin")){
+        if(input.read(expected)!=32)throw new Exception("U-Boot asset truncated");
+      }
+      if(!Arrays.equals(first,expected))throw new Exception("Staged U-Boot identity changed");
+      byte[] cmd="sunxi_flash phy_read 47400000 0 1;efex_test\\0".replace("\\0","\u0000").getBytes(StandardCharsets.US_ASCII);
+      byte[] binary;
+      try(InputStream input=getAssets().open("uboot.bin");ByteArrayOutputStream bytes=new ByteArrayOutputStream()){
+        byte[] b=new byte[8192];int n;while((n=input.read(b))!=-1)bytes.write(b,0,n);binary=bytes.toByteArray();
+      }
+      int offset=bootCommandOffsetV40(binary);
+      if(offset<0||offset+cmd.length>binary.length)throw new Exception("U-Boot command offset invalid");
+      loaderWriteV45(c,out,in,0x47000000L+offset,cmd);
+      if(!Arrays.equals(loaderReadV45(c,out,in,0x47000000L+offset,cmd.length),cmd))
+        throw new Exception("U-Boot RAM command verification failed");
+      report("Verified RAM-only U-Boot command: read flash sector 0 into DRAM");
+      loaderExecuteV45(c,out,in,0x47000000L);
+      report("U-Boot execution acknowledged; waiting for USB reconnection");
+    }catch(Exception e){report("STOP: U-Boot command: "+e.getMessage());return;}
+    finally{if(claimed)c.releaseInterface(iface);c.close();}
+    try{Thread.sleep(5000);}catch(InterruptedException e){Thread.currentThread().interrupt();return;}
+    UsbDevice next=null;
+    for(int attempt=0;attempt<10;attempt++){
+      for(UsbDevice candidate:manager.getDeviceList().values())
+        if(candidate.getVendorId()==VID&&candidate.getProductId()==PID&&manager.hasPermission(candidate))next=candidate;
+      if(next!=null){
+        UsbDeviceConnection check=manager.openDevice(next);
+        if(check!=null){
+          UsbInterface it=next.getInterface(0);UsbEndpoint a=null,b=null;
+          for(int j=0;j<it.getEndpointCount();j++){
+            UsbEndpoint ep=it.getEndpoint(j);
+            if(ep.getAddress()==0x82)a=ep;if(ep.getAddress()==0x01)b=ep;
+          }
+          boolean ok=false;
+          try{
+            ok=check.claimInterface(it,false);
+            if(ok&&a!=null&&b!=null){
+              byte[] buf=new byte[131072];
+              for(int pos=0;pos<buf.length;pos+=4096){
+                byte[] chunk=loaderReadV45(check,b,a,0x47400000L+pos,4096);
+                System.arraycopy(chunk,0,buf,pos,chunk.length);
+              }
+              String hash=hexDigest(MessageDigest.getInstance("SHA-256").digest(buf));
+              java.io.File file=new java.io.File(getFilesDir(),"nes-flash-sector0-128k.bin");
+              try(java.io.FileOutputStream stream=new java.io.FileOutputStream(file)){stream.write(buf);stream.getFD().sync();}
+              report("READ COMPLETE: first 128 KiB flash sector saved in private app storage");
+              report("SHA-256: "+hash);
+              report("NOT A FULL BACKUP. No flash writes performed. File remains in app-private storage.");
+              return;
+            }
+          }catch(Exception e){report("Reconnect attempt "+(attempt+1)+": "+e.getMessage());}
+          finally{if(ok)check.releaseInterface(it);check.close();}
+        }
+      }
+      try{Thread.sleep(2000);}catch(InterruptedException e){Thread.currentThread().interrupt();return;}
+    }
+    report("STOP: Could not re-establish USB FEL session after U-Boot. Power-cycle into FEL mode if needed.");
   }
   void showAllStagesV48(){
     new AlertDialog.Builder(this).setTitle("One APK: all hardware stages")
