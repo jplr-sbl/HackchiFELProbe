@@ -49,7 +49,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  v3.0"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  v3.1"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -65,6 +65,7 @@ public class MainActivity extends Activity {
     button(actions,"Choose / replace U-Boot file",v->selectLoaderFile());
     button(actions,"Choose FES1 DRAM initializer",v->selectFes1File());
     button(actions,"Run v3.0 offline protocol self-tests",v->new Thread(()->protocolSelfTestsV30()).start());
+    button(actions,"v3.1 Verify BOTH Hakchi binaries",v->new Thread(()->verifyBothUpstreamV31()).start());
     button(actions,"Export JSON report",v->exportDiagnosticJson());
     root.addView(actions);
 
@@ -167,6 +168,52 @@ public class MainActivity extends Activity {
     else selectLoaderFile();
   }
 
+  static final String FES1_UPSTREAM_GIT_SHA1="a64371dc69714e78132af03bac874278b91bb87e";
+  static final String UBOOT_UPSTREAM_GIT_SHA1="0c743b303f129853edef7bb5c1c40d64a355ab03";
+  static String hexDigest(byte[] data){
+    StringBuilder h=new StringBuilder();
+    for(byte b:data)h.append(String.format(Locale.US,"%02x",b&255));
+    return h.toString();
+  }
+  void verifyUpstreamBlobV31(String label,Uri uri,long expectedSize,String expectedGitSha){
+    report("--- v3.1 "+label+" upstream Git blob verification ---");
+    if(uri==null){report("BLOCKED: "+label+" file not selected");return;}
+    try{
+      ByteArrayOutputStream bytes=new ByteArrayOutputStream();
+      try(InputStream input=getContentResolver().openInputStream(uri)){
+        if(input==null)throw new Exception("Cannot open selected file");
+        byte[] b=new byte[8192];int n;
+        while((n=input.read(b))!=-1){
+          if(n==0)continue;
+          if(bytes.size()+n>16*1024*1024)throw new Exception("File exceeds 16 MiB limit");
+          bytes.write(b,0,n);
+        }
+      }
+      byte[] data=bytes.toByteArray();
+      MessageDigest sha1=MessageDigest.getInstance("SHA-1");
+      byte[] gitHeader=("blob "+data.length+"\\0").getBytes(StandardCharsets.US_ASCII);
+      sha1.update(gitHeader);sha1.update(data);
+      String gitSha=hexDigest(sha1.digest());
+      String sha256=hexDigest(MessageDigest.getInstance("SHA-256").digest(data));
+      report("File bytes: "+data.length+"; SHA-256: "+sha256);
+      report("Computed Git blob SHA-1: "+gitSha);
+      report("Published ClusterM/hakchi2 stable Git blob SHA-1: "+expectedGitSha);
+      boolean match=data.length==expectedSize&&gitSha.equalsIgnoreCase(expectedGitSha);
+      report((match?"PASS":"FAIL")+": "+label+" byte-for-byte Git blob identity "+(match?"MATCHES":"DOES NOT MATCH")+" original stable branch snapshot");
+      report("Note: matching upstream repository content does not independently establish device safety.");
+    }catch(Exception e){report("FAIL: "+label+" upstream verification: "+e.getMessage());}
+  }
+  void verifyBothUpstreamV31(){
+    report("=== v3.1 upstream file verification (OFFLINE, NO USB WRITES) ===");
+    report("Reference: github.com/ClusterM/hakchi2 stable/data/");
+    verifyUpstreamBlobV31("FES1",savedUriV31("fes1_uri"),12624,FES1_UPSTREAM_GIT_SHA1);
+    verifyUpstreamBlobV31("U-Boot",savedLoaderUri(),573440,UBOOT_UPSTREAM_GIT_SHA1);
+    report("Hardware loader execution and flash operations remain DISABLED.");
+  }
+  Uri savedUriV31(String key){
+    String raw=getPreferences(MODE_PRIVATE).getString(key,"");
+    try{return raw.isEmpty()?null:Uri.parse(raw);}catch(Exception e){return null;}
+  }
   void selectFes1File(){
     Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
     intent.addCategory(Intent.CATEGORY_OPENABLE);
