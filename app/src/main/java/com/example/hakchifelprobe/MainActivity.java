@@ -49,7 +49,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  v4.5 FES1 LOADER"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  v4.6 STAGED HARDWARE"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -94,6 +94,9 @@ public class MainActivity extends Activity {
     button(advanced,"RAM reliability ×5",v->new Thread(()->readScratchRam(5)).start());
     button(advanced,"Console identification",v->new Thread(()->identifyConsole()).start());
     button(advanced,"EXPERIMENTAL: Load and execute FES1 in SRAM",v->confirmLoaderV45());
+    button(actions,"Stage 3: Verify DRAM (read-only)",v->new Thread(()->runStage3V46()).start());
+    button(actions,"Stage 4: U-Boot compatibility gate",v->new Thread(()->runStage4V46()).start());
+    button(actions,"Stage 5: Storage / backup / Hakchi gate",v->new Thread(()->runStage5V46()).start());
     button(advanced,"Backup readiness assessment",v->new Thread(()->backupReadiness()).start());
     button(advanced,"Firmware backup requirements",v->showBackupRequirements());
     root.addView(advanced);
@@ -898,6 +901,82 @@ public class MainActivity extends Activity {
       report("FES1 execution command acknowledged; DRAM initialization NOT YET VERIFIED");
     }catch(Exception e){report("FAIL: FES1 loader stage: "+e.getMessage());}
     finally{if(claimed)c.releaseInterface(iface);c.close();}
+  }
+  volatile boolean dramVerifiedV46=false;
+  void runStage3V46(){
+    report("=== STAGE 3: LIVE DRAM READ VERIFICATION ===");
+    dramVerifiedV46=false;
+    UsbDevice d=device;
+    if(d==null||!manager.hasPermission(d)){report("BLOCKED: connect FEL console and grant USB permission");return;}
+    UsbInterface iface=null;UsbEndpoint in=null,out=null;
+    for(int i=0;i<d.getInterfaceCount();i++){
+      UsbInterface it=d.getInterface(i);UsbEndpoint a=null,b=null;
+      for(int k=0;k<it.getEndpointCount();k++){
+        UsbEndpoint ep=it.getEndpoint(k);
+        if(ep.getType()!=UsbConstants.USB_ENDPOINT_XFER_BULK)continue;
+        if(ep.getAddress()==0x82)a=ep;
+        if(ep.getAddress()==0x01)b=ep;
+      }
+      if(a!=null&&b!=null){iface=it;in=a;out=b;break;}
+    }
+    if(iface==null){report("BLOCKED: FEL endpoints missing");return;}
+    UsbDeviceConnection c=manager.openDevice(d);
+    if(c==null){report("FAIL: unable to open FEL USB connection");return;}
+    boolean claimed=false;
+    try{
+      claimed=c.claimInterface(iface,false);
+      if(!claimed)throw new Exception("USB claim failed");
+      felWriteRequest(c,out,in);
+      byte[] version=felRead(c,out,in,32),st=felRead(c,out,in,8);
+      if(!"AWUSBFEX".equals(new String(version,0,8,StandardCharsets.US_ASCII))||
+        st[0]!=(byte)0xff||st[1]!=(byte)0xff)throw new Exception("FEL version/status invalid");
+      int soc=(ByteBuffer.wrap(version).order(ByteOrder.LITTLE_ENDIAN).getInt(8)>>>8)&0xffff;
+      if(soc!=0x1667)throw new Exception("Unexpected SoC 0x"+Integer.toHexString(soc));
+      byte[] fes1=verifiedFes1V45();
+      byte[] tail=loaderReadV45(c,out,in,0x2000+fes1.length-128,128);
+      if(!Arrays.equals(tail,Arrays.copyOfRange(fes1,fes1.length-128,fes1.length)))
+        throw new Exception("FES1 loader tail not present; run FES1 stage first");
+      // Read an unused DRAM test window; reads alone do not establish DRAM stability.
+      byte[] first=loaderReadV45(c,out,in,0x47000000L,128);
+      byte[] second=loaderReadV45(c,out,in,0x47000000L,128);
+      if(!Arrays.equals(first,second))throw new Exception("DRAM readback unstable");
+      // Detect a common unmapped/bus-fill pattern; this remains a provisional test.
+      boolean uniform=true;
+      for(int i=1;i<first.length;i++)if(first[i]!=first[0]){uniform=false;break;}
+      if(uniform)throw new Exception("DRAM returned a uniform byte pattern; cannot confirm initialization");
+      dramVerifiedV46=true;
+      report("PASS: 2 matching DRAM reads at 0x47000000 (128 bytes)");
+      report("DRAM SHA-256: "+hexDigest(MessageDigest.getInstance("SHA-256").digest(first)));
+      report("PROVISIONAL: stable reads do not prove DRAM writes or full memory integrity");
+    }catch(Exception e){report("NOT VERIFIED: Stage 3: "+e.getMessage());}
+    finally{if(claimed)c.releaseInterface(iface);c.close();}
+  }
+  void runStage4V46(){
+    report("=== STAGE 4: U-BOOT SAFETY GATE ===");
+    if(!dramVerifiedV46){report("BLOCKED: Stage 3 DRAM verification must pass this session");return;}
+    try{
+      byte[] data;
+      try(InputStream in=getAssets().open("uboot.bin");ByteArrayOutputStream b=new ByteArrayOutputStream()){
+        byte[] buf=new byte[8192];int n;
+        while((n=in.read(buf))!=-1){if(n>0)b.write(buf,0,n);if(b.size()>573440)throw new Exception("Oversized U-Boot");}
+        data=b.toByteArray();
+      }
+      MessageDigest md=MessageDigest.getInstance("SHA-1");
+      md.update(("blob "+data.length+((char)0)).getBytes(StandardCharsets.US_ASCII));md.update(data);
+      if(data.length!=573440||!UBOOT_UPSTREAM_GIT_SHA1.equals(hexDigest(md.digest())))
+        throw new Exception("U-Boot identity failed");
+      int offset=bootCommandOffsetV40(data);
+      if(offset<0)throw new Exception("U-Boot bootcmd missing");
+      report("PASS: verified U-Boot binary and bootcmd offset "+offset);
+      report("NOT IMPLEMENTED: controlled U-Boot upload, execution, USB reconnect and recovery validation");
+      report("No U-Boot executed; no flash read or write attempted");
+    }catch(Exception e){report("FAIL: Stage 4 preflight: "+e.getMessage());}
+  }
+  void runStage5V46(){
+    report("=== STAGE 5: STORAGE / BACKUP / HAKCHI CAPABILITY GATE ===");
+    report("NOT IMPLEMENTED: live flash read; firmware backup; Hakchi detection; game management");
+    report("BLOCKED: Stage 4 must establish U-Boot execution and verified reconnect first");
+    report("No firmware extraction, storage write, or game modification attempted");
   }
   void identifyConsole(){
     UsbDevice d=device;
