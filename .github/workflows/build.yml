@@ -33,7 +33,7 @@ jobs:
           }
           for name, (size, expected_sha) in expected.items():
               data = (pathlib.Path("app/src/main/assets") / name).read_bytes()
-              actual = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\\0" + data).hexdigest()
+              actual = hashlib.sha1(b"blob " + str(len(data)).encode() + bytes([0]) + data).hexdigest()
               assert len(data) == size and actual == expected_sha, f"{name}: upstream identity mismatch"
               print(f"PASS {name}: {len(data)} bytes; Git blob SHA-1 {actual}")
           PY
