@@ -49,7 +49,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  ALL-IN-ONE"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  v3.0"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -63,6 +63,8 @@ public class MainActivity extends Activity {
     auditButton=button(actions,"Run complete READ-ONLY audit",v->beginAudit());
     button(actions,"Run ALL checks (USB + saved loader)",v->runAllInOne());
     button(actions,"Choose / replace U-Boot file",v->selectLoaderFile());
+    button(actions,"Choose FES1 DRAM initializer",v->selectFes1File());
+    button(actions,"Run v3.0 offline protocol self-tests",v->new Thread(()->protocolSelfTestsV30()).start());
     button(actions,"Export JSON report",v->exportDiagnosticJson());
     root.addView(actions);
 
@@ -142,7 +144,7 @@ public class MainActivity extends Activity {
       });}
     }).start();
   }
-  static final int INSPECT_LOADER=4106;
+  static final int INSPECT_LOADER=4106, INSPECT_FES1=4107;
   boolean allInOnePending=false;
   void runAllInOne(){
     append("=== ALL-IN-ONE: USB diagnostics and saved loader inspection ===");
@@ -165,6 +167,65 @@ public class MainActivity extends Activity {
     else selectLoaderFile();
   }
 
+  void selectFes1File(){
+    Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+    intent.addCategory(Intent.CATEGORY_OPENABLE);
+    intent.setType("*/*");
+    startActivityForResult(intent,INSPECT_FES1);
+  }
+  void inspectFes1(Uri uri){
+    report("--- v3.0 FES1 DRAM initializer inspection (OFFLINE) ---");
+    try(InputStream input=getContentResolver().openInputStream(uri)){
+      if(input==null)throw new Exception("File could not be opened");
+      MessageDigest md=MessageDigest.getInstance("SHA-256");
+      byte[] buf=new byte[8192];long size=0;int n;
+      while((n=input.read(buf))!=-1){
+        if(n==0)continue;
+        size+=n;if(size>1024*1024)throw new Exception("FES1 file exceeds 1 MiB limit");
+        md.update(buf,0,n);
+      }
+      StringBuilder hash=new StringBuilder();
+      for(byte b:md.digest())hash.append(String.format(Locale.US,"%02x",b&255));
+      report("FES1 size: "+size+" bytes; SHA-256: "+hash);
+      report("Upstream Hakchi stable data/fes1.bin reports 12,624 bytes.");
+      report("Size comparison: "+(size==12624?"MATCHES published size; NOT proof of integrity":"DIFFERS from published size"));
+      report("FES1 execution: DISABLED; DRAM initialization: NOT ATTEMPTED.");
+    }catch(Exception e){report("FES1 inspection failed: "+e.getMessage());}
+  }
+  static String flashReadCommandV30(long address,long length){
+    final long sector=0x20000L, max=sector*0x100L;
+    if(address<0||length<=0||address%sector!=0||length%sector!=0||length>max)
+      throw new IllegalArgumentException("Unaligned or out-of-range flash read");
+    long transferBase=0x47400000L;
+    return String.format(Locale.US,"sunxi_flash phy_read %x %x %x;efex_test",
+      transferBase,address/sector,length/sector);
+  }
+  void protocolSelfTestsV30(){
+    report("--- v3.0 original Hakchi FEL/flash protocol OFFLINE self-tests ---");
+    report("Reference: ClusterM/hakchi2 stable FelLib/Fel.cs");
+    report("FES1 SRAM load address: 0x00002000; DRAM base: 0x40000000");
+    report("U-Boot DRAM address: 0x47000000; transfer buffer: 0x47400000");
+    report("Flash sector size: 0x20000 (131072 bytes); maximum read chunk: 0x2000000 (32 MiB)");
+    try{
+      String expected="sunxi_flash phy_read 47400000 30 20;efex_test";
+      String actual=flashReadCommandV30(0x600000L,0x400000L);
+      if(!expected.equals(actual))throw new Exception("Unexpected command: "+actual);
+      report("PASS: Flash read command formatting matches upstream example: "+actual);
+      boolean blocked=false;
+      try{flashReadCommandV30(1,0x20000);}catch(IllegalArgumentException e){blocked=true;}
+      if(!blocked)throw new Exception("Misaligned address accepted");
+      blocked=false;
+      try{flashReadCommandV30(0,0x20001);}catch(IllegalArgumentException e){blocked=true;}
+      if(!blocked)throw new Exception("Misaligned length accepted");
+      blocked=false;
+      try{flashReadCommandV30(0,0x2020000);}catch(IllegalArgumentException e){blocked=true;}
+      if(!blocked)throw new Exception("Oversized transfer accepted");
+      report("PASS: Unaligned addresses, lengths and oversized chunks rejected");
+      report("PASS: No USB communication used by offline command encoder.");
+    }catch(Exception e){report("FAIL: Offline protocol test: "+e.getMessage());}
+    report("FES1 execution, U-Boot execution, flash read/write: DISABLED.");
+    report("Next: independent loader validation and controlled recovery plan before hardware access.");
+  }
   void selectLoaderFile(){
     Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
     intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -660,6 +721,7 @@ public class MainActivity extends Activity {
   void runAllTests(){
     report("=== FEL Probe v2.0/2.1: COMPLETE READ-ONLY AUDIT ===");
     report("Hardware and software checks only; no storage commands or flashing.");
+    protocolSelfTestsV30();
     softwarePreflight();
     if(device==null||!manager.hasPermission(device)){
       report("BLOCKED: FEL hardware tests require USB permission.");
