@@ -51,7 +51,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  v4.7.1 SCROLL FIX"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  v4.8 ALL STAGES"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -62,7 +62,8 @@ public class MainActivity extends Activity {
 
     LinearLayout actions=new LinearLayout(this);
     actions.setOrientation(LinearLayout.VERTICAL);
-    auditButton=button(actions,"Run ALL built-in checks",v->runBundledAllV32());
+    auditButton=button(actions,"Run USB + bundled checks",v->runBundledAllV32());
+    button(actions,"ALL STAGES: Guide and test in order",v->showAllStagesV48());
     
 
 
@@ -95,7 +96,7 @@ public class MainActivity extends Activity {
     button(advanced,"Read scratch RAM",v->new Thread(()->readScratchRam(1)).start());
     button(advanced,"RAM reliability ×5",v->new Thread(()->readScratchRam(5)).start());
     button(advanced,"Console identification",v->new Thread(()->identifyConsole()).start());
-    button(advanced,"EXPERIMENTAL: Load and execute FES1 in SRAM",v->confirmLoaderV45());
+    button(actions,"Stage 2: FES1 SRAM loader (experimental)",v->confirmLoaderV45());
     button(actions,"Stage 3: Verify DRAM (read-only)",v->new Thread(()->runStage3V46()).start());
     button(actions,"Stage 4: Upload + verify U-Boot in DRAM",v->confirmUbootStageV47());
     button(actions,"Stage 5: Storage / backup / Hakchi gate",v->new Thread(()->runStage5V46()).start());
@@ -124,6 +125,12 @@ public class MainActivity extends Activity {
     if(Build.VERSION.SDK_INT>=33) registerReceiver(receiver,f,Context.RECEIVER_EXPORTED);
     else registerReceiver(receiver,f);
     scan();
+  }
+  void showAllStagesV48(){
+    new AlertDialog.Builder(this).setTitle("One APK: all hardware stages")
+      .setMessage("Run the steps in order. Each step is included in this APK.\n\n1. USB and bundled binary audit (read-only)\n2. FES1 SRAM upload and execution (experimental)\n3. DRAM read verification\n4. U-Boot DRAM upload and full verification (experimental)\n5. Storage, backup, Hakchi and game-management status\n\nSteps 2 and 4 require separate consent. U-Boot execution, live flash reads, backups and game management are not implemented; this app will not pretend those tests passed. No firmware flash writes are available.")
+      .setPositiveButton("Start with USB audit",(dialog,which)->runBundledAllV32())
+      .setNegativeButton("Close",null).show();
   }
   void beginAudit(){
     if(auditRunning||auditWaitingForPermission){append("Audit already running or waiting for USB permission.");return;}
