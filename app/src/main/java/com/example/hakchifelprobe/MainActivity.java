@@ -22,11 +22,18 @@ public class MainActivity extends Activity {
   UsbDevice device;
   TextView status, log;
   Button permissionButton, probeButton;
+  boolean auditWaitingForPermission=false;
   final BroadcastReceiver receiver = new BroadcastReceiver() {
     @Override public void onReceive(Context c, Intent i) {
       if (!PERMISSION.equals(i.getAction())) return;
-      append(i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED,false) ? "Permission granted" : "Permission denied");
+      boolean granted=i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED,false);
+      append(granted ? "Permission granted" : "Permission denied");
       scan();
+      if(auditWaitingForPermission){
+        auditWaitingForPermission=false;
+        if(granted)startAudit();
+        else append("Audit paused: grant USB permission and tap Run again.");
+      }
     }
   };
   @Override public void onCreate(Bundle b) {
@@ -37,7 +44,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  1.3"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  1.3.1"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -48,7 +55,7 @@ public class MainActivity extends Activity {
 
     LinearLayout actions=new LinearLayout(this);
     actions.setOrientation(LinearLayout.VERTICAL);
-    button(actions,"Run complete READ-ONLY audit",v->new Thread(()->runAllTests()).start());
+    button(actions,"Run complete READ-ONLY audit",v->beginAudit());
     button(actions,"Export JSON report",v->exportDiagnosticJson());
     root.addView(actions);
 
@@ -98,6 +105,21 @@ public class MainActivity extends Activity {
     if(Build.VERSION.SDK_INT>=33) registerReceiver(receiver,f,Context.RECEIVER_EXPORTED);
     else registerReceiver(receiver,f);
     scan();
+  }
+  void beginAudit(){
+    scan();
+    if(device==null){append("BLOCKED: Connect NES Classic in FEL mode, then retry.");return;}
+    if(!manager.hasPermission(device)){
+      auditWaitingForPermission=true;
+      append("USB permission required. Please approve the Android prompt; audit will start automatically.");
+      request();
+      return;
+    }
+    startAudit();
+  }
+  void startAudit(){
+    append("USB permission confirmed; starting read-only audit.");
+    new Thread(()->runAllTests()).start();
   }
   void showBackupRequirements(){
     new AlertDialog.Builder(this).setTitle("Firmware backup: not yet supported")
@@ -415,7 +437,7 @@ public class MainActivity extends Activity {
     UsbDevice d=device;
     String deviceId=d==null?"not connected":String.format(Locale.US,"%04X:%04X",d.getVendorId(),d.getProductId());
     String payload="{\n"+
-      "  \"report_format\": \"hakchi-fel-probe-v1.3\",\n"+
+      "  \"report_format\": \"hakchi-fel-probe-v1.3.1\",\n"+
       "  \"device_id\": \""+deviceId+"\",\n"+
       "  \"usb_permission\": "+(d!=null&&manager.hasPermission(d))+",\n"+
       "  \"firmware_backup_created\": false,\n"+
