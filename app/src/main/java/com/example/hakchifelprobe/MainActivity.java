@@ -49,7 +49,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  2.0 + 2.1"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  ALL-IN-ONE"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -61,6 +61,8 @@ public class MainActivity extends Activity {
     LinearLayout actions=new LinearLayout(this);
     actions.setOrientation(LinearLayout.VERTICAL);
     auditButton=button(actions,"Run complete READ-ONLY audit",v->beginAudit());
+    button(actions,"Run ALL checks (USB + saved loader)",v->runAllInOne());
+    button(actions,"Choose / replace U-Boot file",v->selectLoaderFile());
     button(actions,"Export JSON report",v->exportDiagnosticJson());
     root.addView(actions);
 
@@ -78,7 +80,7 @@ public class MainActivity extends Activity {
       advanced.setVisibility(show?View.VISIBLE:View.GONE);
       advancedToggle.setText(show?"Hide advanced tools  ▴":"Show advanced tools  ▾");
     });
-    button(advanced,"Verify U-Boot identity + storage gate",v->selectLoaderFile());
+    button(advanced,"Verify U-Boot identity + storage gate",v->inspectSavedOrChoose());
     button(advanced,"Scan USB",v->scan());
     permissionButton=button(advanced,"Request USB permission",v->request());
     probeButton=button(advanced,"Open FEL interface",v->probe());
@@ -141,6 +143,28 @@ public class MainActivity extends Activity {
     }).start();
   }
   static final int INSPECT_LOADER=4106;
+  boolean allInOnePending=false;
+  void runAllInOne(){
+    append("=== ALL-IN-ONE: USB diagnostics and saved loader inspection ===");
+    Uri saved=savedLoaderUri();
+    if(saved==null){
+      append("Select the loader once. The app will remember the file where Android permits.");
+      allInOnePending=true;selectLoaderFile();return;
+    }
+    beginAudit();
+    new Thread(()->inspectLoaderFile(saved)).start();
+  }
+  Uri savedLoaderUri(){
+    String value=getPreferences(MODE_PRIVATE).getString("loader_uri","");
+    if(value.isEmpty())return null;
+    try{return Uri.parse(value);}catch(Exception e){return null;}
+  }
+  void inspectSavedOrChoose(){
+    Uri saved=savedLoaderUri();
+    if(saved!=null)new Thread(()->inspectLoaderFile(saved)).start();
+    else selectLoaderFile();
+  }
+
   void selectLoaderFile(){
     Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
     intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -245,6 +269,11 @@ public class MainActivity extends Activity {
       }
       if(shown==0)report("No recognizable bootloader/hardware identification strings found.");
       report("String matches are clues only, not proof of file origin, CPU support or safe execution.");
+      report("--- Offline storage command protocol inventory (non-executing) ---");
+      report("USB FEL version/read framing: implemented and hardware-tested.");
+      report("Bootloader console command transport: NOT IMPLEMENTED / NOT VALIDATED.");
+      report("Flash-read command strings: descriptive only; no command packets transmitted.");
+      report("Protocol encoder for storage: NOT IMPLEMENTED (requires verified specification).");
       report("--- v2.0 U-Boot candidate identity report ---");
       final String observedCandidate="3901c183b4fbabadea517b0abbbe40c86affb8c49b2268d183a6bb9a13cb3650";
       boolean priorSample=hash.toString().equals(observedCandidate)&&size==573440;
@@ -598,7 +627,16 @@ public class MainActivity extends Activity {
   @Override protected void onActivityResult(int request,int result,Intent data){
     super.onActivityResult(request,result,data);
     if(result!=RESULT_OK||data==null||data.getData()==null)return;
-    if(request==INSPECT_LOADER){Uri file=data.getData();new Thread(()->inspectLoaderFile(file)).start();return;}
+    if(request==INSPECT_LOADER){
+      Uri file=data.getData();
+      try{getContentResolver().takePersistableUriPermission(file,Intent.FLAG_GRANT_READ_URI_PERMISSION);}
+      catch(Exception e){append("File permission may need to be renewed later: "+e.getMessage());}
+      getPreferences(MODE_PRIVATE).edit().putString("loader_uri",file.toString()).apply();
+      append("Loader selected and saved for future checks.");
+      if(allInOnePending){allInOnePending=false;beginAudit();}
+      new Thread(()->inspectLoaderFile(file)).start();
+      return;
+    }
     if(request!=EXPORT_DIAGNOSTICS)return;
     Uri uri=data.getData();
     UsbDevice d=device;
