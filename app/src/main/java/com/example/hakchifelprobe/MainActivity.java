@@ -49,7 +49,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  1.8 + 1.9"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  2.0 + 2.1"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -78,7 +78,7 @@ public class MainActivity extends Activity {
       advanced.setVisibility(show?View.VISIBLE:View.GONE);
       advancedToggle.setText(show?"Hide advanced tools  ▴":"Show advanced tools  ▾");
     });
-    button(advanced,"Analyze loader + storage readiness",v->selectLoaderFile());
+    button(advanced,"Verify U-Boot identity + storage gate",v->selectLoaderFile());
     button(advanced,"Scan USB",v->scan());
     permissionButton=button(advanced,"Request USB permission",v->request());
     probeButton=button(advanced,"Open FEL interface",v->probe());
@@ -155,7 +155,7 @@ public class MainActivity extends Activity {
     return x.toString();
   }
   void inspectLoaderFile(Uri uri){
-    report("--- v1.8 embedded binary analysis + v1.9 storage readiness ---");
+    report("--- v2.0 candidate identity + v2.1 storage discovery prerequisites ---");
     report("Local inspection only; no USB transfers, RAM writes, boot or flash commands.");
     try(InputStream input=getContentResolver().openInputStream(uri)){
       if(input==null)throw new Exception("Cannot open selected file");
@@ -245,6 +245,28 @@ public class MainActivity extends Activity {
       }
       if(shown==0)report("No recognizable bootloader/hardware identification strings found.");
       report("String matches are clues only, not proof of file origin, CPU support or safe execution.");
+      report("--- v2.0 U-Boot candidate identity report ---");
+      final String observedCandidate="3901c183b4fbabadea517b0abbbe40c86affb8c49b2268d183a6bb9a13cb3650";
+      boolean priorSample=hash.toString().equals(observedCandidate)&&size==573440;
+      report("Matches previously inspected 560 KiB U-Boot sample: "+(priorSample?"YES (SHA-256 and size)":"NO"));
+      report("Sample identity only: matching the prior file is NOT independent provenance verification.");
+      String buildMarker="U-Boot 2011.09-rc1-00000-g1352b18-dirty";
+      String markerText=new String(all,StandardCharsets.ISO_8859_1);
+      report("Embedded U-Boot 2011.09 build marker: "+(markerText.contains(buildMarker)?"PRESENT":"NOT FOUND"));
+      boolean flashRead=markerText.contains("sunxi_flash phy_read");
+      boolean nand=markerText.contains("setargs_nand");
+      boolean mmc=markerText.contains("setargs_mmc");
+      report("Flash read command string: "+(flashRead?"PRESENT":"NOT FOUND"));
+      report("NAND boot string: "+(nand?"PRESENT":"NOT FOUND")+"; MMC boot string: "+(mmc?"PRESENT":"NOT FOUND"));
+      report("Command strings do not demonstrate callable interfaces or storage hardware compatibility.");
+      report("Trusted upstream binary comparison: NOT PERFORMED (no independently authenticated reference)");
+      report("Bootloader review / read-only command safety: NOT VERIFIED");
+      report("--- v2.1 storage discovery decision ---");
+      report("Storage transport driver: NOT IMPLEMENTED");
+      report("Verified console-specific loader: NOT AVAILABLE");
+      report("Read-only storage identification: BLOCKED");
+      report("No capacity, partition table, NAND ID or eMMC ID was read from console.");
+      report("Decision: FAIL CLOSED; no loader upload or execution.");
       report("--- v1.9 loader / storage readiness ---");
       report("File integrity fingerprint: AVAILABLE (SHA-256 above)");
       report("Known-good loader hash comparison: NOT AVAILABLE (no vetted allowlist)");
@@ -582,7 +604,7 @@ public class MainActivity extends Activity {
     UsbDevice d=device;
     String deviceId=d==null?"not connected":String.format(Locale.US,"%04X:%04X",d.getVendorId(),d.getProductId());
     String payload="{\n"+
-      "  \"report_format\": \"hakchi-fel-probe-v1.6\",\n"+
+      "  \"report_format\": \"hakchi-fel-probe-v2.0-2.1\",\n"+
       "  \"device_id\": \""+deviceId+"\",\n"+
       "  \"usb_permission\": "+(d!=null&&manager.hasPermission(d))+",\n"+
       "  \"firmware_backup_created\": false,\n"+
@@ -598,7 +620,7 @@ public class MainActivity extends Activity {
   }
 
   void runAllTests(){
-    report("=== FEL Probe v1.8/1.9: COMPLETE READ-ONLY AUDIT ===");
+    report("=== FEL Probe v2.0/2.1: COMPLETE READ-ONLY AUDIT ===");
     report("Hardware and software checks only; no storage commands or flashing.");
     softwarePreflight();
     if(device==null||!manager.hasPermission(device)){
@@ -612,6 +634,7 @@ public class MainActivity extends Activity {
     verifyStorageLoaderCompatibilityGate();
     storageDiscoveryPreflight();
     storageAccessGateV19();
+    storageDiscoveryGateV21();
     auditCapabilities();
     report("=== REMAINING CAPABILITIES ===");
     report("NOT IMPLEMENTED: NAND/eMMC controller driver, storage discovery, partition map.");
@@ -700,6 +723,18 @@ public class MainActivity extends Activity {
     report("Partition enumeration: BLOCKED");
     report("DECISION: DENY loader execution and storage access until all prerequisites are validated.");
     report("No storage commands, RAM uploads, firmware changes or writes performed.");
+  }
+  void storageDiscoveryGateV21(){
+    report("--- v2.1 live storage discovery gate ---");
+    boolean connected=device!=null&&manager.hasPermission(device);
+    report("FEL USB permission: "+(connected?"GRANTED":"NOT GRANTED"));
+    report("Known SoC profile from FEL: 0x1667 (see live identification above)");
+    report("Storage device identification protocol: UNAVAILABLE");
+    report("Loader provenance, memory map, command behavior and recovery: UNVERIFIED");
+    report("Storage media type: UNKNOWN (do not infer NAND or eMMC from bootloader strings)");
+    report("Storage capacity: UNKNOWN; partition count: UNKNOWN");
+    report("Result: BLOCKED - actual storage detection has not been implemented.");
+    report("Safety: no executable transfers, memory writes, storage reads or flashing.");
   }
   void auditCapabilities(){
     report("--- Read-only capability audit ---");
