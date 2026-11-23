@@ -51,7 +51,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  v5.1 FLASH EXPORT"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  v5.2 ROM LIBRARY"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -70,6 +70,8 @@ public class MainActivity extends Activity {
 
 
 
+    button(actions,"Import NES ROM into Android library",v->selectNesRomV52());
+    button(actions,"Show imported NES ROMs",v->listNesLibraryV52());
     button(actions,"Export JSON report",v->exportDiagnosticJson());
     root.addView(actions);
 
@@ -160,6 +162,49 @@ public class MainActivity extends Activity {
     }finally{oneTapRunningV49=false;}
   }
   // Experimental first-sector flash read, never writes persistent storage.
+  static final int IMPORT_NES_ROM_V52=6502;
+  void selectNesRomV52(){
+    Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+    i.addCategory(Intent.CATEGORY_OPENABLE);
+    i.setType("application/octet-stream");
+    i.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"application/octet-stream","application/x-nes-rom","*/*"});
+    startActivityForResult(i,IMPORT_NES_ROM_V52);
+  }
+  void importNesRomV52(Uri uri){
+    try(InputStream in=getContentResolver().openInputStream(uri)){
+      if(in==null)throw new Exception("Unable to open selected file");
+      ByteArrayOutputStream out=new ByteArrayOutputStream();
+      byte[] b=new byte[8192];int n;
+      while((n=in.read(b))!=-1){
+        if(out.size()+n>16*1024*1024)throw new Exception("ROM exceeds 16 MiB limit");
+        out.write(b,0,n);
+      }
+      byte[] rom=out.toByteArray();
+      if(rom.length<16||rom[0]!='N'||rom[1]!='E'||rom[2]!='S'||(rom[3]&255)!=0x1a)
+        throw new Exception("Not an iNES-format NES ROM (NES\\u001a header missing)");
+      int prg=rom[4]&255,chr=rom[5]&255;
+      int min=16+prg*16384+chr*8192;
+      if(rom.length<min)throw new Exception("Truncated ROM: expected at least "+min+" bytes");
+      String sha=hexDigest(MessageDigest.getInstance("SHA-256").digest(rom));
+      java.io.File dir=new java.io.File(getFilesDir(),"nes-library");
+      if(!dir.exists()&&!dir.mkdirs())throw new Exception("Cannot create library");
+      java.io.File file=new java.io.File(dir,sha+".nes");
+      try(java.io.FileOutputStream stream=new java.io.FileOutputStream(file)){
+        stream.write(rom);stream.getFD().sync();
+      }
+      report("IMPORTED NES ROM: "+file.getName()+" ("+rom.length+" bytes)");
+      report("iNES PRG banks: "+prg+"; CHR banks: "+chr+"; SHA-256: "+sha);
+      report("Stored locally on Android only. NOT installed on NES Classic.");
+    }catch(Exception e){report("ROM IMPORT FAILED: "+e.getMessage());}
+  }
+  void listNesLibraryV52(){
+    java.io.File dir=new java.io.File(getFilesDir(),"nes-library");
+    java.io.File[] files=dir.listFiles((d,n)->n.endsWith(".nes"));
+    if(files==null||files.length==0){report("NES library is empty; import a .nes file first");return;}
+    report("=== LOCAL NES ROM LIBRARY: "+files.length+" file(s) ===");
+    for(java.io.File f:files)report(f.getName()+" | "+f.length()+" bytes");
+    report("LOCAL ONLY. No console sync or game installation is implemented.");
+  }
   static final int EXPORT_FLASH_SECTOR_V51=6501;
   void exportFlashSectorV51(){
     java.io.File file=new java.io.File(getFilesDir(),"nes-flash-sector0-128k.bin");
@@ -1329,6 +1374,7 @@ public class MainActivity extends Activity {
   @Override protected void onActivityResult(int request,int result,Intent data){
     super.onActivityResult(request,result,data);
     if(result!=RESULT_OK||data==null||data.getData()==null)return;
+    if(request==IMPORT_NES_ROM_V52){Uri selected=data.getData();new Thread(()->importNesRomV52(selected)).start();return;}
     if(request==EXPORT_FLASH_SECTOR_V51){Uri target=data.getData();new Thread(()->writeFlashSectorExportV51(target)).start();return;}
     if(request==INSPECT_FES1){
       Uri file=data.getData();
