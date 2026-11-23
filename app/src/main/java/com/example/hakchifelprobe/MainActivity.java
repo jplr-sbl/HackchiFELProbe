@@ -46,7 +46,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  1.4.1"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  1.5.1"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -479,6 +479,7 @@ public class MainActivity extends Activity {
       identifyConsole();
       backupReadiness();
     }
+    verifyStorageLoaderCompatibilityGate();
     storageDiscoveryPreflight();
     auditCapabilities();
     report("=== REMAINING CAPABILITIES ===");
@@ -487,6 +488,47 @@ public class MainActivity extends Activity {
     report("NOT VERIFIED: restore/recovery or game installation.");
     report("COMPLETE: All currently feasible non-destructive checks attempted.");
     report("Export JSON report to save these results.");
+  }
+  void verifyStorageLoaderCompatibilityGate(){
+    report("--- v1.5 console profile / loader safety gate ---");
+    UsbDevice d=device;
+    if(d==null||!manager.hasPermission(d)){report("BLOCKED: USB permission required");return;}
+    UsbInterface iface=null;UsbEndpoint in=null,out=null;
+    for(int i=0;i<d.getInterfaceCount();i++){
+      UsbInterface it=d.getInterface(i);UsbEndpoint a=null,b=null;
+      for(int j=0;j<it.getEndpointCount();j++){
+        UsbEndpoint ep=it.getEndpoint(j);
+        if(ep.getType()!=UsbConstants.USB_ENDPOINT_XFER_BULK)continue;
+        if(ep.getDirection()==UsbConstants.USB_DIR_IN)a=ep;else b=ep;
+      }
+      if(a!=null&&b!=null){iface=it;in=a;out=b;break;}
+    }
+    if(iface==null){report("FAIL: FEL interface unavailable");return;}
+    UsbDeviceConnection c=manager.openDevice(d);
+    if(c==null){report("FAIL: Could not open USB connection");return;}
+    boolean claimed=false;
+    try{
+      claimed=c.claimInterface(iface,false);
+      if(!claimed)throw new Exception("Cannot claim FEL interface");
+      felWriteRequest(c,out,in);
+      byte[] version=felRead(c,out,in,32);
+      byte[] status=felRead(c,out,in,8);
+      if(!"AWUSBFEX".equals(new String(version,0,8,StandardCharsets.US_ASCII)))
+        throw new Exception("FEL signature mismatch");
+      if((status[0]&255)!=255||(status[1]&255)!=255)
+        throw new Exception("Unexpected FEL response status");
+      ByteBuffer b=ByteBuffer.wrap(version).order(ByteOrder.LITTLE_ENDIAN);
+      int soc=(b.getInt(8)>>>8)&65535;
+      int protocol=b.getShort(16)&65535;
+      long scratch=b.getInt(20)&0xffffffffL;
+      report(String.format(Locale.US,"Observed device profile: SoC 0x%04X, FEL protocol %d, scratch 0x%08X",soc,protocol,scratch));
+      boolean expected=d.getVendorId()==VID&&d.getProductId()==PID&&soc==0x1667&&protocol==1&&scratch==0x7e00;
+      report(expected?"PASS: Observed FEL profile matches expected NES Classic probe profile":"WARNING: Unexpected FEL profile; do not attempt loader operations");
+      report("Loader allowlist: EMPTY (no validated loader binaries bundled)");
+      report("Loader execution: DISABLED regardless of profile match");
+      report("Internal storage access: BLOCKED until a validated loader and read-only protocol are implemented");
+    }catch(Exception e){report("FAIL: Profile verification: "+e.getMessage());}
+    finally{if(claimed)c.releaseInterface(iface);c.close();}
   }
   void storageDiscoveryPreflight(){
     report("--- v1.4 storage discovery prerequisites (read-only) ---");
