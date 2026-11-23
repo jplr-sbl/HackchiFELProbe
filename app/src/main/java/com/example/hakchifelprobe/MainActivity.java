@@ -49,7 +49,7 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  v4.6 STAGED HARDWARE"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  v4.7 U-BOOT DRAM UPLOAD"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -95,7 +95,7 @@ public class MainActivity extends Activity {
     button(advanced,"Console identification",v->new Thread(()->identifyConsole()).start());
     button(advanced,"EXPERIMENTAL: Load and execute FES1 in SRAM",v->confirmLoaderV45());
     button(actions,"Stage 3: Verify DRAM (read-only)",v->new Thread(()->runStage3V46()).start());
-    button(actions,"Stage 4: U-Boot compatibility gate",v->new Thread(()->runStage4V46()).start());
+    button(actions,"Stage 4: Upload + verify U-Boot in DRAM",v->confirmUbootStageV47());
     button(actions,"Stage 5: Storage / backup / Hakchi gate",v->new Thread(()->runStage5V46()).start());
     button(advanced,"Backup readiness assessment",v->new Thread(()->backupReadiness()).start());
     button(advanced,"Firmware backup requirements",v->showBackupRequirements());
@@ -902,6 +902,74 @@ public class MainActivity extends Activity {
     }catch(Exception e){report("FAIL: FES1 loader stage: "+e.getMessage());}
     finally{if(claimed)c.releaseInterface(iface);c.close();}
   }
+  volatile boolean ubootStagedV47=false;
+  void confirmUbootStageV47(){
+    if(!dramVerifiedV46){report("BLOCKED: Stage 3 must pass first");return;}
+    new AlertDialog.Builder(this).setTitle("Stage 4: Upload U-Boot to DRAM?")
+      .setMessage("This experimental step writes the verified Hakchi U-Boot image into volatile DRAM and reads it back for verification. It will NOT execute U-Boot or touch internal flash. A failed transfer may require power-cycling the NES Classic. Continue?")
+      .setNegativeButton("Cancel",null)
+      .setPositiveButton("Upload and verify", (dialog,which)->new Thread(()->runUbootStageV47()).start()).show();
+  }
+  void runUbootStageV47(){
+    report("=== STAGE 4: LIVE U-BOOT DRAM UPLOAD AND VERIFY ===");
+    ubootStagedV47=false;
+    if(!dramVerifiedV46){report("BLOCKED: Stage 3 not verified");return;}
+    UsbDevice d=device;
+    if(d==null||!manager.hasPermission(d)){report("BLOCKED: FEL USB permission missing");return;}
+    UsbInterface iface=null;UsbEndpoint in=null,out=null;
+    for(int i=0;i<d.getInterfaceCount();i++){
+      UsbInterface it=d.getInterface(i);UsbEndpoint a=null,b=null;
+      for(int k=0;k<it.getEndpointCount();k++){
+        UsbEndpoint ep=it.getEndpoint(k);
+        if(ep.getType()!=UsbConstants.USB_ENDPOINT_XFER_BULK)continue;
+        if(ep.getAddress()==0x82)a=ep;
+        if(ep.getAddress()==0x01)b=ep;
+      }
+      if(a!=null&&b!=null){iface=it;in=a;out=b;break;}
+    }
+    if(iface==null){report("BLOCKED: expected FEL endpoints not found");return;}
+    UsbDeviceConnection c=manager.openDevice(d);
+    if(c==null){report("FAIL: USB open failed");return;}
+    boolean claimed=false;
+    try{
+      byte[] data;
+      try(InputStream input=getAssets().open("uboot.bin");ByteArrayOutputStream bytes=new ByteArrayOutputStream()){
+        byte[] buf=new byte[8192];int n;
+        while((n=input.read(buf))!=-1){if(n>0)bytes.write(buf,0,n);if(bytes.size()>573440)throw new Exception("Oversized U-Boot");}
+        data=bytes.toByteArray();
+      }
+      MessageDigest md=MessageDigest.getInstance("SHA-1");
+      md.update(("blob "+data.length+((char)0)).getBytes(StandardCharsets.US_ASCII));md.update(data);
+      if(data.length!=573440||!UBOOT_UPSTREAM_GIT_SHA1.equals(hexDigest(md.digest())))
+        throw new Exception("U-Boot identity mismatch");
+      if(bootCommandOffsetV40(data)<0)throw new Exception("bootcmd field absent");
+      claimed=c.claimInterface(iface,false);
+      if(!claimed)throw new Exception("USB claim failed");
+      felWriteRequest(c,out,in);
+      byte[] version=felRead(c,out,in,32),st=felRead(c,out,in,8);
+      if(!"AWUSBFEX".equals(new String(version,0,8,StandardCharsets.US_ASCII))||
+        st[0]!=(byte)0xff||st[1]!=(byte)0xff)throw new Exception("FEL identity invalid");
+      int soc=(ByteBuffer.wrap(version).order(ByteOrder.LITTLE_ENDIAN).getInt(8)>>>8)&0xffff;
+      if(soc!=0x1667)throw new Exception("Unexpected SoC");
+      report("Uploading verified U-Boot "+data.length+" bytes to DRAM 0x47000000");
+      for(int pos=0;pos<data.length;pos+=4096){
+        int n=Math.min(4096,data.length-pos);
+        loaderWriteV45(c,out,in,0x47000000L+pos,Arrays.copyOfRange(data,pos,pos+n));
+        if((pos/4096)%32==0)report("U-Boot upload "+(pos+n)+"/"+data.length);
+      }
+      report("Upload complete; checking all bytes against DRAM readback");
+      for(int pos=0;pos<data.length;pos+=4096){
+        int n=Math.min(4096,data.length-pos);
+        byte[] read=loaderReadV45(c,out,in,0x47000000L+pos,n);
+        for(int j=0;j<n;j++)if(read[j]!=data[pos+j])
+          throw new Exception("U-Boot DRAM mismatch at byte "+(pos+j));
+      }
+      ubootStagedV47=true;
+      report("PASS: U-Boot image fully uploaded and byte-for-byte verified in volatile DRAM");
+      report("NOT EXECUTED: U-Boot boot, USB reconnect, flash read and backup remain disabled");
+    }catch(Exception e){report("FAIL: Stage 4 U-Boot upload: "+e.getMessage());}
+    finally{if(claimed)c.releaseInterface(iface);c.close();}
+  }
   volatile boolean dramVerifiedV46=false;
   void runStage3V46(){
     report("=== STAGE 3: LIVE DRAM READ VERIFICATION ===");
@@ -975,7 +1043,8 @@ public class MainActivity extends Activity {
   void runStage5V46(){
     report("=== STAGE 5: STORAGE / BACKUP / HAKCHI CAPABILITY GATE ===");
     report("NOT IMPLEMENTED: live flash read; firmware backup; Hakchi detection; game management");
-    report("BLOCKED: Stage 4 must establish U-Boot execution and verified reconnect first");
+    report(ubootStagedV47?"PASS: U-Boot staged in DRAM; execution/reconnect not implemented":"BLOCKED: Stage 4 U-Boot staging not verified");
+    report("BLOCKED: live flash reads require controlled U-Boot execution and verified reconnect");
     report("No firmware extraction, storage write, or game modification attempted");
   }
   void identifyConsole(){
