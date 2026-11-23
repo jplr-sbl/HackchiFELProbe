@@ -61,7 +61,7 @@ public class MainActivity extends Activity {
     LinearLayout actions=new LinearLayout(this);
     actions.setOrientation(LinearLayout.VERTICAL);
     auditButton=button(actions,"Run ALL built-in checks",v->runBundledAllV32());
-    button(actions,"v4.0 Preview read-only storage session",v->new Thread(()->storageSessionPreviewV40()).start());
+    
 
 
 
@@ -199,7 +199,7 @@ public class MainActivity extends Activity {
     report("=== v4.0 read-only storage session engineering preview ===");
     report("Mode: OFFLINE protocol validation; hardware execution disabled.");
     try{
-      byte[] upload=felMessageV40(0x0101,0x47000000L,0x20);
+      byte[] upload=felMessageV40(0x0103,0x47000000L,0x20);
       byte[] header=awUsbHeaderV40(false,16);
       boolean fields=upload.length==16&&ByteBuffer.wrap(upload).order(ByteOrder.LITTLE_ENDIAN).getInt(4)==0x47000000;
       boolean envelope=header.length==32&&header[0]=='A'&&header[3]=='C'&&header[15]==12&&header[16]==0x12;
@@ -222,12 +222,12 @@ public class MainActivity extends Activity {
     }catch(Exception e){report("FAIL: v4.0 protocol preview: "+e.getMessage());}
   }
   void runBundledAllV32(){
-    append("=== v3.2 bundled Hakchi binaries + offline protocol + USB audit ===");
+    append("=== v4.0 ALL-IN-ONE: bundled binaries, FEL protocol, storage preview and USB audit ===");
     new Thread(()->{
       verifyBundledV32("FES1","fes1.bin",12624,"a64371dc69714e78132af03bac874278b91bb87e");
       verifyBundledV32("U-Boot","uboot.bin",573440,"0c743b303f129853edef7bb5c1c40d64a355ab03");
-      protocolSelfTestsV30();
-      report("=== Built-in binary and protocol checks complete; USB audit follows ===");
+      storageSessionPreviewV40();
+      report("=== Bundled binaries and v4.0 protocol preview complete; USB audit follows ===");
       runOnUiThread(()->beginAudit());
     }).start();
   }
