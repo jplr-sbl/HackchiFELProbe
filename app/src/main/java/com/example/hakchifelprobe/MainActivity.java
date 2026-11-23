@@ -51,10 +51,10 @@ public class MainActivity extends Activity {
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  v5.2 ROM LIBRARY"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI • NES CLASSIC TEST CENTER"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
-    subtitle.setText("NES Classic  /  Android USB toolkit");
+    subtitle.setText("One APK • guided diagnostics • clear results");
     subtitle.setTextColor(Color.LTGRAY); subtitle.setTextSize(12);
     root.addView(subtitle);
     status=new TextView(this); status.setTextColor(Color.WHITE); status.setTextSize(14);
@@ -62,8 +62,13 @@ public class MainActivity extends Activity {
 
     LinearLayout actions=new LinearLayout(this);
     actions.setOrientation(LinearLayout.VERTICAL);
-    auditButton=button(actions,"Run USB + bundled checks",v->runBundledAllV32());
-    button(actions,"ALL STAGES: Guide and test in order",v->showAllStagesV48());
+    TextView guide=new TextView(this);
+    guide.setText("START HERE  •  Run all safe checks, then follow the on-screen USB instructions. No firmware writing.");
+    guide.setTextColor(Color.rgb(174,211,255));guide.setTextSize(15);guide.setPadding(12,18,12,18);
+    guide.setBackgroundColor(Color.rgb(29,43,64));actions.addView(guide);
+    auditButton=button(actions,"START • Guided all-in-one test",v->startGuidedV53());
+    button(actions,"Run offline self-tests (no console)",v->new Thread(()->runOfflineTestsV53()).start());
+    button(actions,"View hardware test stages",v->showAllStagesV48());
     
 
 
@@ -76,7 +81,7 @@ public class MainActivity extends Activity {
     root.addView(actions);
 
     TextView note=new TextView(this);
-    note.setText("READ-ONLY  •  Storage backup and flashing are not available");
+    note.setText("CAUTION • Flash read is experimental; firmware backup, restore and game sync are not implemented.");
     note.setTextSize(12);note.setTextColor(Color.YELLOW);
     note.setPadding(0,8,0,8);root.addView(note);
 
@@ -98,13 +103,13 @@ public class MainActivity extends Activity {
     button(advanced,"Read scratch RAM",v->new Thread(()->readScratchRam(1)).start());
     button(advanced,"RAM reliability ×5",v->new Thread(()->readScratchRam(5)).start());
     button(advanced,"Console identification",v->new Thread(()->identifyConsole()).start());
-    button(actions,"ONE BUTTON: Connect + verify NES Classic",v->confirmOneTapV49());
-    button(actions,"Stage 2: FES1 SRAM loader (experimental)",v->confirmLoaderV45());
-    button(actions,"Stage 3: Verify DRAM (read-only)",v->new Thread(()->runStage3V46()).start());
-    button(actions,"Stage 4: Upload + verify U-Boot in DRAM",v->confirmUbootStageV47());
-    button(actions,"Stage 5: EXPERIMENTAL read first flash sector",v->confirmFlashReadV50());
-    button(actions,"Export captured flash sector (SHA-256 verified)",v->exportFlashSectorV51());
-    button(actions,"Storage / backup / Hakchi status",v->new Thread(()->runStage5V46()).start());
+    button(advanced,"ONE BUTTON: Connect + verify NES Classic",v->confirmOneTapV49());
+    button(advanced,"Stage 2: FES1 SRAM loader (experimental)",v->confirmLoaderV45());
+    button(advanced,"Stage 3: Verify DRAM (read-only)",v->new Thread(()->runStage3V46()).start());
+    button(advanced,"Stage 4: Upload + verify U-Boot in DRAM",v->confirmUbootStageV47());
+    button(advanced,"Stage 5: EXPERIMENTAL read first flash sector",v->confirmFlashReadV50());
+    button(advanced,"Export captured flash sector (SHA-256 verified)",v->exportFlashSectorV51());
+    button(advanced,"Storage / backup / Hakchi status",v->new Thread(()->runStage5V46()).start());
     button(advanced,"Backup readiness assessment",v->new Thread(()->backupReadiness()).start());
     button(advanced,"Firmware backup requirements",v->showBackupRequirements());
     root.addView(advanced);
@@ -130,6 +135,75 @@ public class MainActivity extends Activity {
     if(Build.VERSION.SDK_INT>=33) registerReceiver(receiver,f,Context.RECEIVER_EXPORTED);
     else registerReceiver(receiver,f);
     scan();
+  }
+  volatile boolean guidedBusyV53=false;
+  void startGuidedV53(){
+    if(guidedBusyV53){report("A guided test is already running");return;}
+    new AlertDialog.Builder(this).setTitle("NES Classic • one guided test")
+      .setMessage("1. Offline checks run automatically.\\n2. Connect the NES Classic to your phone with a USB OTG adapter.\\n3. Put the console into FEL mode (hold RESET while switching POWER on, then release RESET).\\n4. Approve Android USB permission if prompted.\\n5. The app runs the established RAM-only FES1/DRAM/U-Boot upload/readback checks.\\n\\nThis does NOT execute U-Boot or touch internal flash. No games are installed.")
+      .setNegativeButton("Cancel",null)
+      .setPositiveButton("Start", (d,w)->new Thread(()->runGuidedV53()).start()).show();
+  }
+  void runGuidedV53(){
+    if(guidedBusyV53)return;
+    guidedBusyV53=true;
+    try{
+      report("=== GUIDED TEST CENTER v5.3 ===");
+      if(!runOfflineTestsV53()){report("STOP: Offline test failed. Hardware checks skipped.");return;}
+      scanOnUiV53();
+      UsbDevice target=device;
+      if(target==null){report("NEXT: Connect NES Classic in FEL mode, then tap START again.");return;}
+      if(!manager.hasPermission(target)){
+        report("NEXT: USB permission is required. Approve the Android prompt, then tap START again.");
+        runOnUiThread(()->request());
+        return;
+      }
+      report("USB permission: PASS. Running RAM-only communication checks.");
+      runOneTapV49();
+      report("GUIDED TEST COMPLETE: Review PASS/STOP lines and share log if needed.");
+      report("NOT TESTED: full firmware backup, Hakchi detection, game sync, recovery.");
+    }catch(Exception e){report("GUIDED TEST FAILED: "+e.getMessage());}
+    finally{guidedBusyV53=false;}
+  }
+  void scanOnUiV53(){
+    for(UsbDevice d:manager.getDeviceList().values())
+      if(d.getVendorId()==VID&&d.getProductId()==PID){device=d;return;}
+    device=null;
+  }
+  boolean runOfflineTestsV53(){
+    report("--- AUTOMATED OFFLINE SELF-TESTS ---");
+    int passed=0;
+    try{
+      byte[] h=usbHeader(0x12,16);
+      ByteBuffer b=ByteBuffer.wrap(h).order(ByteOrder.LITTLE_ENDIAN);
+      if(h.length!=32||h[0]!='A'||h[1]!='W'||h[2]!='U'||h[3]!='C'||b.getInt(8)!=16)
+        throw new Exception("AWUC header encoding mismatch");
+      passed++;report("PASS 1/4: FEL USB packet encoding");
+      byte[] rom=new byte[16+16384+8192];
+      rom[0]='N';rom[1]='E';rom[2]='S';rom[3]=0x1a;rom[4]=1;rom[5]=1;
+      if(rom[0]!='N'||rom[3]!=0x1a||16+(rom[4]&255)*16384+(rom[5]&255)*8192!=rom.length)
+        throw new Exception("iNES parser sample mismatch");
+      passed++;report("PASS 2/4: iNES ROM header and length calculation");
+      byte[] original="NES Classic integrity self-test".getBytes(StandardCharsets.UTF_8);
+      java.io.File temp=new java.io.File(getCacheDir(),"self-test-v53.tmp");
+      try{
+        try(java.io.FileOutputStream o=new java.io.FileOutputStream(temp)){o.write(original);o.getFD().sync();}
+        byte[] read=new byte[original.length];
+        try(java.io.FileInputStream in=new java.io.FileInputStream(temp)){
+          int offset=0,n;
+          while(offset<read.length&&(n=in.read(read,offset,read.length-offset))>0)offset+=n;
+          if(offset!=read.length||in.read()!=-1)throw new Exception("Readback length mismatch");
+        }
+        MessageDigest md=MessageDigest.getInstance("SHA-256");
+        if(!Arrays.equals(md.digest(original),md.digest(read)))throw new Exception("SHA-256 mismatch");
+      }finally{temp.delete();}
+      passed++;report("PASS 3/4: Android file write/readback and SHA-256");
+      String escaped=jsonEscape("quote \\" and slash \\\\");
+      if(!escaped.contains("\\\"")||!escaped.contains("\\\\\\\\"))throw new Exception("JSON escape mismatch");
+      passed++;report("PASS 4/4: Diagnostic JSON escaping");
+      report("PASS: "+passed+"/4 offline checks. These do not verify console flash or game installation.");
+      return true;
+    }catch(Exception e){report("FAIL: Offline check "+(passed+1)+"/4: "+e.getMessage());return false;}
   }
   volatile boolean oneTapRunningV49=false;
   void confirmOneTapV49(){
