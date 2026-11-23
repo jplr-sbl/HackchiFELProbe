@@ -44,12 +44,14 @@ public class MainActivity extends Activity {
   @Override public void onCreate(Bundle b) {
     super.onCreate(b);
     manager=(UsbManager)getSystemService(USB_SERVICE);
+    ScrollView pageScroll=new ScrollView(this);
+    pageScroll.setFillViewport(true);
     LinearLayout root=new LinearLayout(this);
     root.setOrientation(LinearLayout.VERTICAL);
     root.setPadding(18,22,18,14);
     root.setBackgroundColor(Color.rgb(13,19,30));
     TextView title=new TextView(this);
-    title.setText("HAKCHI FEL  •  v4.7 U-BOOT DRAM UPLOAD"); title.setTextSize(22); title.setTextColor(Color.CYAN);
+    title.setText("HAKCHI FEL  •  v4.7.1 SCROLL FIX"); title.setTextSize(22); title.setTextColor(Color.CYAN);
     root.addView(title);
     TextView subtitle=new TextView(this);
     subtitle.setText("NES Classic  /  Android USB toolkit");
@@ -108,7 +110,7 @@ public class MainActivity extends Activity {
     log=new TextView(this); log.setTextColor(Color.GREEN); log.setTextSize(12);
     log.setTextIsSelectable(true);log.setPadding(8,8,8,8);
     scroll.addView(log);
-    root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+    root.addView(scroll,new LinearLayout.LayoutParams(-1,320));
     LinearLayout footer=new LinearLayout(this);
     footer.setOrientation(LinearLayout.HORIZONTAL);
     Button share=button(footer,"Share log",v->{Intent i=new Intent(Intent.ACTION_SEND);i.setType("text/plain");i.putExtra(Intent.EXTRA_TEXT,log.getText().toString());startActivity(Intent.createChooser(i,"Share diagnostic log"));});
@@ -116,7 +118,8 @@ public class MainActivity extends Activity {
     share.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
     clear.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
     root.addView(footer);
-    setContentView(root);
+    pageScroll.addView(root);
+    setContentView(pageScroll);
     IntentFilter f=new IntentFilter(PERMISSION);
     if(Build.VERSION.SDK_INT>=33) registerReceiver(receiver,f,Context.RECEIVER_EXPORTED);
     else registerReceiver(receiver,f);
