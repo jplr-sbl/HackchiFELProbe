@@ -46,7 +46,7 @@ public class MainActivity extends Activity {
 
     LinearLayout actions=new LinearLayout(this);
     actions.setOrientation(LinearLayout.VERTICAL);
-    button(actions,"Run all diagnostics",v->new Thread(()->fullDiagnostics()).start());
+    button(actions,"Run ALL tests (one tap)",v->new Thread(()->runAllTests()).start());
     button(actions,"Export JSON report",v->exportDiagnosticJson());
     root.addView(actions);
 
@@ -413,7 +413,7 @@ public class MainActivity extends Activity {
     UsbDevice d=device;
     String deviceId=d==null?"not connected":String.format(Locale.US,"%04X:%04X",d.getVendorId(),d.getProductId());
     String payload="{\n"+
-      "  \"report_format\": \"hakchi-fel-probe-v0.8\",\n"+
+      "  \"report_format\": \"hakchi-fel-probe-v1.1\",\n"+
       "  \"device_id\": \""+deviceId+"\",\n"+
       "  \"usb_permission\": "+(d!=null&&manager.hasPermission(d))+",\n"+
       "  \"firmware_backup_created\": false,\n"+
@@ -428,6 +428,21 @@ public class MainActivity extends Activity {
     }catch(Exception e){append("FAIL: JSON export: "+e.getMessage());}
   }
 
+  void runAllTests(){
+    report("=== FEL Probe v1.1: ONE-TAP TEST SUITE ===");
+    report("Running USB, FEL version, RAM reliability, identification and backup readiness...");
+    fullDiagnostics();
+    if(device==null||!manager.hasPermission(device)){
+      report("STOP: USB permission missing; grant permission and retry.");
+      return;
+    }
+    readScratchRam(5);
+    identifyConsole();
+    backupReadiness();
+    report("=== ONE-TAP SUITE FINISHED ===");
+    report("Review PASS/FAIL entries above. Storage backup and restore are not implemented.");
+    report("Export JSON report to share all results.");
+  }
   void fullDiagnostics(){
     UsbDevice d=device;
     report("=== FEL Probe v0.9 full read-only diagnostics ===");
