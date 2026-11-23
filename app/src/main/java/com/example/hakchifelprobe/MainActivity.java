@@ -86,7 +86,7 @@ public class MainActivity extends Activity {
     root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
     LinearLayout footer=new LinearLayout(this);
     footer.setOrientation(LinearLayout.HORIZONTAL);
-    Button share=button(footer,"Share log",v->{Intent i=new Intent(Intent.ACTION_SEND);i.setType("text/plain");i.putExtra(Intent.EXTRA_TEXT",log.getText().toString());startActivity(Intent.createChooser(i,"Share diagnostic log"));});
+    Button share=button(footer,"Share log",v->{Intent i=new Intent(Intent.ACTION_SEND);i.setType("text/plain");i.putExtra(Intent.EXTRA_TEXT,log.getText().toString());startActivity(Intent.createChooser(i,"Share diagnostic log"));});
     Button clear=button(footer,"Clear log",v->log.setText(""));
     share.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
     clear.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
